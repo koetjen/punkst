@@ -43,8 +43,9 @@ def factor_report(_args):
     def load_de(path):
         if not os.path.exists(path):
             sys.exit(f"Cannot find DE file")
-        df = pd.read_csv(path, sep='\t', dtype={'Factor':str})
-        df.rename(columns = {"logPval":"log10pval", "ApproxFC":"FoldChange", "gene":"Feature", "Gene":"Feautre", "Pval":"pval"}, inplace=True)
+        df = pd.read_csv(path, sep='\t')
+        df.rename(columns = {"logPval":"log10pval", "ApproxFC":"FoldChange", "gene":"Feature", "Gene":"Feature", "Pval":"pval", "factor:"Factor"}, inplace=True)
+        df['Factor'] = df['Factor'].astype(str)
         sortby = "log10pval"
         if sortby not in df.columns:
             sortby = "Chi2"
