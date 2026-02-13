@@ -15,10 +15,12 @@ void TileOperator::loadDenseTile(const TileInfo& blk, std::ifstream& in, DenseTi
     if (coord_dim_ != 2) {
         error("%s: Only 2D records are supported", __func__);
     }
-    const bool coordScaled = (mode_ & 0x2) != 0;
+    // readNextRecord2DAsPixel() returns pixel-space coordinates for float inputs
+    // and for int inputs with scaled mode enabled. Convert tile bounds likewise.
+    const bool recCoordsInPixel = ((mode_ & 0x4) == 0) || ((mode_ & 0x2) != 0);
     out.key = TileKey{blk.idx.row, blk.idx.col};
     tile2bound(out.key, out.pixX0, out.pixX1, out.pixY0, out.pixY1, formatInfo_.tileSize);
-    if (coordScaled) {
+    if (recCoordsInPixel) {
         out.pixX0 = coord2pix(out.pixX0);
         out.pixX1 = coord2pix(out.pixX1);
         out.pixY0 = coord2pix(out.pixY0);

@@ -130,7 +130,7 @@ public:
 
     void printIndex() const;
 
-    void reorgTiles(const std::string& outPrefix, int32_t tileSize = -1);
+    void reorgTiles(const std::string& outPrefix, int32_t tileSize = -1, bool binaryOutput = false);
 
     void smoothTopLabels2D(const std::string& outPrefix, int32_t islandSmoothRounds = 1, bool fillEmptyIslands = false);
 

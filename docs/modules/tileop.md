@@ -63,8 +63,10 @@ If we would need to merge multiple sets of inference results or want to join the
 Note that this is **not** required for visualization `draw-pixel-factors`.
 
 ```bash
-punkst tile-op --reorganize --in path/prefix [--binary] --out path/reorg_prefix
+punkst tile-op --reorganize --in path/prefix [--binary] --out path/reorg_prefix [--binary-out]
 ```
+
+`--binary-out` - (Optional) Write reorganized output in binary format (`.bin`) instead of TSV (`.tsv`).
 
 ### Merge Multiple Inference Results
 
@@ -80,7 +82,7 @@ punkst tile-op --in path/result1 [--binary] \
 
 `--k2keep` - (Optional) A list of integers specifying how many top factors to keep from each source file (including the main input). If not provided, all factors are kept.
 
-`--binary-out` - (Optional) Save the merged output in binary format instead of TSV.
+`--binary-out` - (Optional) Save merged or reorganized output in binary format instead of TSV.
 
 In the above example, from file `result1.bin` (or `.tsv`) we keep top 3 factors, from `result2.tsv` we keep top 1 factor, and from `result3.bin` we keep top 2 factors. If the specified number exceeds the number of factors available in the corresponding file, all factors in the file are kept.
 
