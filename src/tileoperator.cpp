@@ -491,7 +491,7 @@ void TileOperator::pix2cell(const std::string& ptPrefix, const std::string& outP
     notice("%s: Pseudobulk matrix written to %s", __func__, pbFile.c_str());
 }
 
-void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize) {
+void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize, bool binaryOutput) {
     if (blocks_.empty()) {
         error("No blocks found in index");
     }
@@ -571,28 +571,161 @@ void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize) {
 
     notice("Found %d main blocks and %d boundary blocks", mainBlocksCount, boundaryBlocksCount);
 
-    std::string outFile = outPrefix + ".tsv";
+    if (!binaryOutput) {
+        std::string outFile = outPrefix + ".tsv";
+        std::string outIndex = outPrefix + ".index";
+
+        int fdMain = open(outFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+        if (fdMain < 0) error("Cannot open output file %s", outFile.c_str());
+
+        int fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+        if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
+
+        // Write index header
+        IndexHeader idxHeader = formatInfo_;
+        idxHeader.mode &= ~0x8;
+        idxHeader.tileSize = tileSize;
+        if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
+            error("Error writing header to index output file: %s", outIndex.c_str());
+        }
+
+        if (!write_all(fdMain, headerLine_.data(), headerLine_.size())) {
+            error("Error writing header");
+        }
+
+        size_t currentOffset = headerLine_.size();
+
+        // 1. Process tiles with main blocks
+        for (const auto& kv : tileMainBlocks) {
+            TileKey tile = kv.first;
+            const auto& indices = kv.second;
+
+            IndexEntryF newEntry(tile.row, tile.col);
+            newEntry.st = currentOffset;
+            newEntry.n = 0;
+            tile2bound(tile, newEntry.xmin, newEntry.xmax, newEntry.ymin, newEntry.ymax, tileSize);
+
+            // Write main blocks
+            for (size_t i : indices) {
+                const auto& mb = blocks_[i];
+                size_t len = mb.idx.ed - mb.idx.st;
+                if (len > 0) {
+                    dataStream_.seekg(mb.idx.st);
+                    size_t copied = 0;
+                    const size_t bufSz = 1024 * 1024;
+                    std::vector<char> buffer(bufSz);
+                    while (copied < len) {
+                        size_t toRead = std::min(bufSz, len - copied);
+                        dataStream_.read(buffer.data(), toRead);
+                        if (!write_all(fdMain, buffer.data(), toRead)) error("Write error");
+                        copied += toRead;
+                    }
+                    newEntry.n += mb.idx.n;
+                }
+            }
+
+            // Append boundary lines if any
+            if (boundaryLines.count(tile)) {
+                const auto& lines = boundaryLines[tile];
+                for (size_t i = 0; i < lines.size(); ++i) {
+                    const std::string& l = lines[i];
+                    if (!write_all(fdMain, l.data(), l.size())) error("Write error");
+                    if (!write_all(fdMain, "\n", 1)) error("Write error");
+
+                    newEntry.n++;
+                }
+                boundaryLines.erase(tile);
+            }
+
+            newEntry.ed = lseek(fdMain, 0, SEEK_CUR);
+            currentOffset = newEntry.ed;
+            if (newEntry.n > 0) {
+                if (!write_all(fdIndex, &newEntry, sizeof(newEntry))) error("Index write error");
+            }
+        }
+
+        // 2. Process remaining boundary-only tiles
+        for (const auto& kv : boundaryLines) {
+            TileKey tile = kv.first;
+            const auto& lines = kv.second;
+            IndexEntryF& newEntry = boundaryInfo[tile];
+            newEntry.st = currentOffset;
+            for (size_t i = 0; i < lines.size(); ++i) {
+                const std::string& l = lines[i];
+                if (!write_all(fdMain, l.data(), l.size())) error("Write error");
+                if (!write_all(fdMain, "\n", 1)) error("Write error");
+                newEntry.n++;
+            }
+            newEntry.ed = lseek(fdMain, 0, SEEK_CUR);
+            currentOffset = newEntry.ed;
+            if (newEntry.n > 0) {
+                if (!write_all(fdIndex, &newEntry, sizeof(newEntry))) error("Index write error");
+            }
+        }
+
+        close(fdMain);
+        close(fdIndex);
+        notice("Reorganization completed. Output written to %s\n Index written to %s", outFile.c_str(), outIndex.c_str());
+        return;
+    }
+
+    std::string outFile = outPrefix + ".bin";
     std::string outIndex = outPrefix + ".index";
 
     int fdMain = open(outFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
     if (fdMain < 0) error("Cannot open output file %s", outFile.c_str());
-
     int fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
     if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
 
-    // Write index header
     IndexHeader idxHeader = formatInfo_;
     idxHeader.mode &= ~0x8;
+    idxHeader.mode |= 0x1;
     idxHeader.tileSize = tileSize;
-    if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
-        error("Error writing header to index output file: %s", outIndex.c_str());
+    idxHeader.coordType = (idxHeader.mode & 0x4) ? 1 : 0;
+    const size_t coordCount = (coord_dim_ == 3) ? 3u : 2u;
+    const size_t coordBytes = (idxHeader.mode & 0x4) ? sizeof(int32_t) : sizeof(float);
+    const size_t kBytes = static_cast<size_t>(std::max(0, k_)) * (sizeof(int32_t) + sizeof(float));
+    const size_t recordSize = coordCount * coordBytes + kBytes;
+    if (recordSize > std::numeric_limits<uint32_t>::max()) {
+        error("%s: Computed output record size overflows uint32_t", __func__);
     }
+    idxHeader.recordSize = static_cast<uint32_t>(recordSize);
+    if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) error("Index header write error");
 
-    if (!write_all(fdMain, headerLine_.data(), headerLine_.size())) {
-        error("Error writing header");
-    }
+    auto writeLineToBinary = [&](std::string_view line, size_t blockId) {
+        std::string recLine(line);
+        if (coord_dim_ == 3) {
+            if (mode_ & 0x4) {
+                PixTopProbs3D<int32_t> rec;
+                if (!parseLine(recLine, rec)) {
+                    error("%s: Invalid 3D int record in block %zu: %s", __func__, blockId, recLine.c_str());
+                }
+                if (rec.write(fdMain) < 0) error("Write error");
+            } else {
+                PixTopProbs3D<float> rec;
+                if (!parseLine(recLine, rec)) {
+                    error("%s: Invalid 3D float record in block %zu: %s", __func__, blockId, recLine.c_str());
+                }
+                if (rec.write(fdMain) < 0) error("Write error");
+            }
+        } else {
+            if (mode_ & 0x4) {
+                PixTopProbs<int32_t> rec;
+                if (!parseLine(recLine, rec)) {
+                    error("%s: Invalid 2D int record in block %zu: %s", __func__, blockId, recLine.c_str());
+                }
+                if (rec.write(fdMain) < 0) error("Write error");
+            } else {
+                PixTopProbs<float> rec;
+                if (!parseLine(recLine, rec)) {
+                    error("%s: Invalid 2D float record in block %zu: %s", __func__, blockId, recLine.c_str());
+                }
+                if (rec.write(fdMain) < 0) error("Write error");
+            }
+        }
+    };
 
-    size_t currentOffset = headerLine_.size();
+    size_t currentOffset = 0;
 
     // 1. Process tiles with main blocks
     for (const auto& kv : tileMainBlocks) {
@@ -604,36 +737,46 @@ void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize) {
         newEntry.n = 0;
         tile2bound(tile, newEntry.xmin, newEntry.xmax, newEntry.ymin, newEntry.ymax, tileSize);
 
-        // Write main blocks
+        // Parse and write main blocks
         for (size_t i : indices) {
             const auto& mb = blocks_[i];
             size_t len = mb.idx.ed - mb.idx.st;
-            if (len > 0) {
-                dataStream_.seekg(mb.idx.st);
-                size_t copied = 0;
-                const size_t bufSz = 1024 * 1024;
-                std::vector<char> buffer(bufSz);
-                while (copied < len) {
-                    size_t toRead = std::min(bufSz, len - copied);
-                    dataStream_.read(buffer.data(), toRead);
-                    if (!write_all(fdMain, buffer.data(), toRead)) error("Write error");
-                    copied += toRead;
+            if (len == 0) continue;
+            dataStream_.clear();
+            dataStream_.seekg(mb.idx.st);
+            std::vector<char> data(len);
+            dataStream_.read(data.data(), len);
+            if (!dataStream_) error("%s: Read error for block %zu", __func__, i);
+
+            const char* ptr = data.data();
+            const char* end = ptr + len;
+            const char* lineStart = ptr;
+            while (lineStart < end) {
+                const char* lineEnd = static_cast<const char*>(memchr(lineStart, '\n', end - lineStart));
+                if (!lineEnd) lineEnd = end;
+
+                size_t lineLen = lineEnd - lineStart;
+                if (lineLen > 0 && lineStart[lineLen - 1] == '\r') lineLen--;
+                if (lineLen == 0 || lineStart[0] == '#') {
+                    lineStart = lineEnd + 1;
+                    continue;
                 }
-                newEntry.n += mb.idx.n;
+                std::string_view lineView(lineStart, lineLen);
+                writeLineToBinary(lineView, i);
+                newEntry.n++;
+                lineStart = lineEnd + 1;
             }
         }
 
         // Append boundary lines if any
-        if (boundaryLines.count(tile)) {
-            const auto& lines = boundaryLines[tile];
-            for (size_t i = 0; i < lines.size(); ++i) {
-                const std::string& l = lines[i];
-                if (!write_all(fdMain, l.data(), l.size())) error("Write error");
-                if (!write_all(fdMain, "\n", 1)) error("Write error");
-
+        auto boundaryIt = boundaryLines.find(tile);
+        if (boundaryIt != boundaryLines.end()) {
+            const auto& lines = boundaryIt->second;
+            for (const auto& l : lines) {
+                writeLineToBinary(l, static_cast<size_t>(-1));
                 newEntry.n++;
             }
-            boundaryLines.erase(tile);
+            boundaryLines.erase(boundaryIt);
         }
 
         newEntry.ed = lseek(fdMain, 0, SEEK_CUR);
@@ -649,10 +792,8 @@ void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize) {
         const auto& lines = kv.second;
         IndexEntryF& newEntry = boundaryInfo[tile];
         newEntry.st = currentOffset;
-        for (size_t i = 0; i < lines.size(); ++i) {
-            const std::string& l = lines[i];
-            if (!write_all(fdMain, l.data(), l.size())) error("Write error");
-            if (!write_all(fdMain, "\n", 1)) error("Write error");
+        for (const auto& l : lines) {
+            writeLineToBinary(l, static_cast<size_t>(-1));
             newEntry.n++;
         }
         newEntry.ed = lseek(fdMain, 0, SEEK_CUR);
@@ -806,7 +947,11 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
         warning("%s: No tiles to process", __func__);
         return;
     }
-    const bool coordScaled = (mode_ & 0x2) != 0;
+    // readNextRecord2DAsPixel() always returns pixel-space coordinates for:
+    // 1) float-coordinate inputs, and
+    // 2) int-coordinate inputs marked as scaled (mode_ & 0x2).
+    // Tile bounds must be converted to the same space before range checks.
+    const bool recCoordsInPixel = ((mode_ & 0x4) == 0) || ((mode_ & 0x2) != 0);
 
     std::string outFile = outPrefix + ".bin";
     std::string outIndex = outPrefix + ".index";
@@ -854,7 +999,7 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
         out.col = tile.col;
         int32_t pixX0, pixX1, pixY0, pixY1; // Tile bounds (global pix coord)
         tile2bound(tile, pixX0, pixX1, pixY0, pixY1, formatInfo_.tileSize);
-        if (coordScaled) {
+        if (recCoordsInPixel) {
             pixX0 = coord2pix(pixX0);
             pixX1 = coord2pix(pixX1);
             pixY0 = coord2pix(pixY0);

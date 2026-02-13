@@ -13,6 +13,9 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     int32_t verbose = 1000000;
     bool filter = false;
     bool topOnly = false;
+    int32_t targetFactor = -1;
+    bool allFactors = false;
+    std::vector<std::string> factorListStr;
     bool isBinary = false;
     float minProb = 1e-3;
     int32_t debug_ = 0;
@@ -35,6 +38,9 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
       .add_option("ymin", "Minimum y coordinate", ymin)
       .add_option("ymax", "Maximum y coordinate", ymax)
       .add_option("filter", "Access only the queried region using the index", filter)
+      .add_option("target-factor", "Draw only a single factor using probability-weighted plasma colormap", targetFactor)
+      .add_option("all-single-factors", "Loop through all factors and output one plasma-weighted image per factor", allFactors)
+      .add_option("factor-list", "A list of factor IDs to draw with probability-weighted plasma colormap", factorListStr)
       .add_option("channel-list", "A list of channel IDs to draw", channelListStr)
       .add_option("color-list", "A list of colors for channels in hex code (#RRGGBB)", colorListStr)
       .add_option("min-prob", "Minimum probability to consider a pixel", minProb);
@@ -71,6 +77,183 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     if (filter && indexFile.empty())
         error("Index file is required when --filter is set");
 
+    auto composeOutPath = [&](const std::string& base, int factor) {
+        std::string out = base;
+        size_t slash = out.find_last_of("/\\");
+        size_t dot = out.find_last_of('.');
+        if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) {
+            out.insert(dot, "_K" + std::to_string(factor));
+        } else {
+            out += "_K" + std::to_string(factor);
+        }
+        return out;
+    };
+
+    auto drawTargetFactor = [&](int32_t tf, const std::string& outPath) -> int32_t {
+        // set up reader
+        TileOperator reader(dataFile, indexFile, headerFile);
+        int32_t k = reader.getK();
+        if (k<=0) error("No factor columns found in header");
+        if (!rangeFile.empty()) {
+           readCoordRange(rangeFile, xmin, xmax, ymin, ymax);
+        }
+        if (xmin >= xmax || ymin >= ymax) {
+            if (!indexFile.empty() && reader.getBoundingBox(xmin, xmax, ymin, ymax)) {
+                notice("Using full data range from index: xmin=%.1f, xmax=%.1f, ymin=%.1f, ymax=%.1f", xmin, xmax, ymin, ymax);
+            } else {
+                error("Invalid range: xmin >= xmax or ymin >= ymax");
+            }
+        }
+        if (filter) {
+            int32_t ntiles = reader.query(xmin, xmax, ymin, ymax);
+            if (ntiles <= 0)
+                error("No data in the queried region");
+            notice("Found %d tiles intersecting the queried region", ntiles);
+        } else {
+            reader.openDataStream();
+        }
+
+        if (scale<=0) error("--scale must be >0");
+
+        // image dims
+        int width  = int(std::floor((xmax-xmin)/scale))+1;
+        int height = int(std::floor((ymax-ymin)/scale))+1;
+        notice("Image size: %d x %d", width, height);
+        if (width<=1||height<=1)
+            error("Image dimensions are zero; check your bounds/scale");
+
+        cv::Mat1f sumP(height, width, 0.0f);
+        cv::Mat1b countImg(height, width, uchar(0));
+
+        PixTopProbs<float> rec;
+        int32_t ret, nline=0, nskip=0, nkept=0;
+        while ((ret = reader.next(rec)) >= 0) {
+            if (ret==0) {
+                if (nkept>10000) {
+                    warning("Stopped at invalid line %d", nline);
+                    break;
+                }
+                error("%s: Invalid or corrupted input", __FUNCTION__);
+            }
+            if (++nline % verbose == 0)
+                notice("Processed %d lines, skipped %d, kept %d", nline, nskip, nkept);
+
+            int xpix = int((rec.x - xmin)/scale);
+            int ypix = int((rec.y - ymin)/scale);
+            if (xpix<0||xpix>=width||ypix<0||ypix>=height) {
+                debug("Skipping out-of-bounds pixel (%.1f, %.1f) → (%d, %d)", rec.x, rec.y, xpix, ypix);
+                if (debug_ && nline > debug_) {
+                    return 0;
+                }
+                continue;
+            }
+            if (countImg(ypix, xpix)>=255) { nskip++; continue; }
+
+            float p = 0.0f;
+            bool found = false;
+            for (int i=0;i<k;++i) {
+                if (rec.ks[i] == tf) {
+                    p = rec.ps[i];
+                    found = true;
+                    break;
+                }
+            }
+            if (!found || p <= 0) { continue; }
+            sumP(ypix, xpix) += p;
+            countImg(ypix, xpix) += 1;
+            ++nkept;
+        }
+        notice("Finished reading input; building image");
+
+        cv::Mat out(height, width, CV_8UC3, cv::Scalar(0,0,0));
+        cv::Mat1b gray(height, width, uchar(0));
+        for (int y=0;y<height;++y) {
+            for (int x=0;x<width;++x) {
+                if (countImg(y,x)) {
+                    float avgp = sumP(y,x) / countImg(y,x);
+                    if (avgp < 0) avgp = 0;
+                    if (avgp > 1) avgp = 1;
+                    gray(y,x) = cv::saturate_cast<uchar>(avgp * 255.0f);
+                }
+            }
+        }
+        cv::applyColorMap(gray, out, cv::COLORMAP_PLASMA);
+        // set zero-probability pixels to black
+        for (int y=0;y<height;++y) {
+            for (int x=0;x<width;++x) {
+                if (gray(y,x) == 0) {
+                    out.at<cv::Vec3b>(y,x) = cv::Vec3b(0,0,0);
+                }
+            }
+        }
+
+        notice("Writing image to %s ...", outPath.c_str());
+        if (!cv::imwrite(outPath, out))
+            error("Error writing output image: %s", outPath.c_str());
+
+        return 0;
+    };
+
+    if (!factorListStr.empty()) {
+        std::vector<int> factors;
+        for (auto &s : factorListStr) {
+            try {
+                factors.push_back(std::stoi(s));
+            } catch (...) {
+                error("Invalid --factor-list entry: %s", s.c_str());
+            }
+        }
+        for (int f : factors) {
+            std::string outPath = composeOutPath(outFile, f);
+            drawTargetFactor(f, outPath);
+        }
+        return 0;
+    }
+
+    if (allFactors) {
+        // determine max factor id
+        int32_t maxFactor = -1;
+        TileOperator reader(dataFile, indexFile, headerFile);
+        int32_t k = reader.getK();
+        if (k<=0) error("No factor columns found in header");
+        if (!rangeFile.empty()) {
+           readCoordRange(rangeFile, xmin, xmax, ymin, ymax);
+        }
+        if (xmin >= xmax || ymin >= ymax) {
+            if (!indexFile.empty() && reader.getBoundingBox(xmin, xmax, ymin, ymax)) {
+                notice("Using full data range from index: xmin=%.1f, xmax=%.1f, ymin=%.1f, ymax=%.1f", xmin, xmax, ymin, ymax);
+            } else {
+                error("Invalid range: xmin >= xmax or ymin >= ymax");
+            }
+        }
+        if (filter) {
+            int32_t ntiles = reader.query(xmin, xmax, ymin, ymax);
+            if (ntiles <= 0)
+                error("No data in the queried region");
+            notice("Found %d tiles intersecting the queried region", ntiles);
+        } else {
+            reader.openDataStream();
+        }
+        PixTopProbs<float> rec;
+        int32_t ret;
+        while ((ret = reader.next(rec)) >= 0) {
+            if (ret==0) continue;
+            for (int i=0;i<k;++i) {
+                int ch = rec.ks[i];
+                if (ch >= 0 && ch > maxFactor) maxFactor = ch;
+            }
+        }
+        if (maxFactor < 0)
+            error("No valid factor IDs found in input");
+
+        notice("Drawing all factors from 0 to %d", maxFactor);
+        for (int f=0; f<=maxFactor; ++f) {
+            std::string outPath = composeOutPath(outFile, f);
+            drawTargetFactor(f, outPath);
+        }
+        return 0;
+    }
+
     // set up reader
     TileOperator reader(dataFile, indexFile, headerFile);
     int32_t k = reader.getK();
@@ -94,8 +277,9 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         reader.openDataStream();
     }
 
+    bool useTarget = (targetFactor >= 0);
     bool selected = !channelListStr.empty();
-    if (!selected && colorFile.empty())
+    if (!useTarget && !selected && colorFile.empty())
         error("Either --in-color or both --channel-list and --color-list must be provided");
 
     std::vector<std::vector<int>> cmtx;
@@ -113,7 +297,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
                 error("Invalid --color-list");
             selectedMap[ std::stoi(channelListStr[i]) ] = c;
         }
-    } else {
+    } else if (!useTarget) {
         std::ifstream cs(colorFile);
         if (!cs.is_open())
             error("Error opening color file: %s", colorFile.c_str());
@@ -284,6 +468,10 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     // accumulators
     cv::Mat3f sumImg(height, width, cv::Vec3f(0,0,0));
     cv::Mat1b countImg(height, width, uchar(0));
+    cv::Mat1f sumP;
+    if (useTarget) {
+        sumP = cv::Mat1f(height, width, 0.0f);
+    }
     // read & accumulate
     PixTopProbs<float> rec;
     int32_t ret, nline=0, nskip=0, nkept=0;
@@ -308,6 +496,23 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
             continue;
         }
         if (countImg(ypix, xpix)>=255) { nskip++; continue; }
+
+        if (useTarget) {
+            float p = 0.0f;
+            bool found = false;
+            for (int i=0;i<k;++i) {
+                if (rec.ks[i] == targetFactor) {
+                    p = rec.ps[i];
+                    found = true;
+                    break;
+                }
+            }
+            if (!found || p <= 0) { continue; }
+            sumP(ypix, xpix) += p;
+            countImg(ypix, xpix) += 1;
+            ++nkept;
+            continue;
+        }
 
         float R=0,G=0,B=0;
         if (topOnly || k==1) {
@@ -375,15 +580,30 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
 
     // finalize image
     cv::Mat out(height, width, CV_8UC3, cv::Scalar(0,0,0));
-    for (int y=0;y<height;++y) {
-        for (int x=0;x<width;++x) {
-            if (countImg(y,x)) {
-                cv::Vec3f avg = sumImg(y,x) / countImg(y,x);
-                out.at<cv::Vec3b>(y,x) = cv::Vec3b(
-                    cv::saturate_cast<uchar>(avg[2]),  // B
-                    cv::saturate_cast<uchar>(avg[1]),  // G
-                    cv::saturate_cast<uchar>(avg[0])   // R
-                );
+    if (useTarget) {
+        cv::Mat1b gray(height, width, uchar(0));
+        for (int y=0;y<height;++y) {
+            for (int x=0;x<width;++x) {
+                if (countImg(y,x)) {
+                    float avgp = sumP(y,x) / countImg(y,x);
+                    if (avgp < 0) avgp = 0;
+                    if (avgp > 1) avgp = 1;
+                    gray(y,x) = cv::saturate_cast<uchar>(avgp * 255.0f);
+                }
+            }
+        }
+        cv::applyColorMap(gray, out, cv::COLORMAP_PLASMA);
+    } else {
+        for (int y=0;y<height;++y) {
+            for (int x=0;x<width;++x) {
+                if (countImg(y,x)) {
+                    cv::Vec3f avg = sumImg(y,x) / countImg(y,x);
+                    out.at<cv::Vec3b>(y,x) = cv::Vec3b(
+                        cv::saturate_cast<uchar>(avg[2]),  // B
+                        cv::saturate_cast<uchar>(avg[1]),  // G
+                        cv::saturate_cast<uchar>(avg[0])   // R
+                    );
+                }
             }
         }
     }

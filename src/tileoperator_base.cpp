@@ -1180,24 +1180,28 @@ void TileOperator::parseHeaderLine() {
     if (!ss.is_open()) {
         error("Error opening data file: %s", dataFile_.c_str());
     }
-    std::string line, headerLine_;
+    std::string line;
+    std::string colHeaderLine;
+    headerLine_.clear();
     int32_t nline = 0;
     while (std::getline(ss, line)) {
         nline++;
-        if (line.empty() || line.substr(0, 2) == "##") {
+        if (line.empty()) continue;
+        if (line[0] == '#') {
+            headerLine_ += line;
+            headerLine_ += "\n";
+            if (line.size() > 1 && line[1] != '#') {
+                colHeaderLine = line;
+            }
             continue;
         }
-        if (line[0] == '#') {
-            headerLine_ = line;
-        } else {
-            break;
-        }
+        break;
     }
-    if (headerLine_.empty()) {
+    if (colHeaderLine.empty()) {
         return;
     }
 
-    line = headerLine_.substr(1); // skip initial '#'
+    line = colHeaderLine.substr(1); // skip initial '#'
     std::vector<std::string> tokens;
     split(tokens, "\t", line);
     std::unordered_map<std::string, uint32_t> header;
