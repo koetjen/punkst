@@ -74,7 +74,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     pl.add_option("out", "Output prefix", outPrefix)
       .add_option("coord-digits", "Number of decimal digits to output for coordinates (for dump-tsv)", coordDigits)
       .add_option("prob-digits", "Number of decimal digits to output for probabilities (for dump-tsv)", probDigits)
-      .add_option("binary-out", "Output in binary format (merge only)", binaryOut)
+      .add_option("binary-out", "Output in binary format (merge, reorganize)", binaryOut)
       .add_option("threads", "Number of threads to use", threads)
       .add_option("debug", "Debug", debug_);
 
@@ -109,7 +109,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     }
 
     if (reorganize) {
-        tileOp.reorgTiles(outPrefix, tileSize);
+        tileOp.reorgTiles(outPrefix, tileSize, binaryOut);
         return 0;
     }
 
