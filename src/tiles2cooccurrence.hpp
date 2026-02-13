@@ -255,7 +255,7 @@ private:
                         fprintf(ofs, "%u\t%u\t%.2f\n", f1, f2, w);
                     } else {
                         int64_t c = int64_t(kv2.second);
-                        fprintf(ofs, "%u\t%u\t%ld\n", f1, f2, c);
+                        fprintf(ofs, "%u\t%u\t%" PRId64 "\n", f1, f2, c);
                     }
                 }
             }
