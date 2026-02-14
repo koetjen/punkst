@@ -39,10 +39,9 @@ public:
         }
         if ((mode_ & 0x1) == 0) {
             if (!headerFile.empty()) {
-                parseHeaderFile(headerFile);
-            } else {
-                parseHeaderLine();
+                warning("%s: --header is ignored for TSV input; parsing header line from TSV file", __func__);
             }
+            parseHeaderLine();
         }
     }
     ~TileOperator() {
