@@ -36,7 +36,13 @@ void Tiles2MinibatchBase<T>::setupOutput() {
     idxHeader.magic = PUNKST_INDEX_MAGIC;
     idxHeader.mode = (K << 16) | 0x8;
     idxHeader.tileSize = tileSize;
-    idxHeader.topK = topk_;
+    // Encode topK in the index header format expected by parseKvec().
+    if (topk_ <= 0xF) {
+        idxHeader.topK = static_cast<uint32_t>(topk_);
+    } else {
+        // Extended encoding: bit31=1, n_sets=1, total_k=topk_.
+        idxHeader.topK = (1u << 31) | (1u << 16) | (static_cast<uint32_t>(topk_) & 0xFFFF);
+    }
     idxHeader.pixelResolution = pixelResolution_;
     const auto& box = tileReader.getGlobalBox();
     idxHeader.xmin = box.xmin; idxHeader.xmax = box.xmax;

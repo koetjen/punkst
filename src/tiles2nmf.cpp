@@ -376,6 +376,7 @@ void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, 
     (void)anchorPtr;
     if (tileData.pts.empty() && tileData.extPts.empty() &&
         tileData.pts3d.empty() && tileData.extPts3d.empty()) {
+        Base::enqueueEmptyResult(ticket, tileData);
         return;
     }
     std::vector<AnchorPoint> anchors;
@@ -383,11 +384,13 @@ void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, 
     int32_t nAnchors = initAnchors(tileData, anchors, minibatch);
     debug("%s: Thread %d (ticket %d) initialized %d anchors", __func__, threadId, ticket, nAnchors);
     if (nAnchors <= 0) {
+        Base::enqueueEmptyResult(ticket, tileData);
         return;
     }
     int32_t nPixels = makeMinibatch(tileData, anchors, minibatch);
     debug("%s: Thread %d (ticket %d) made minibatch with %d pixels", __func__, threadId, ticket, nPixels);
     if (nPixels < 10) {
+        Base::enqueueEmptyResult(ticket, tileData);
         return;
     }
     PixelEM::EMstats stats;

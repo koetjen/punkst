@@ -163,6 +163,7 @@ void Tiles2MinibatchBase<T>::tileWorker(int threadId) {
         notice("%s: Thread %d (ticket %d) read tile (%d, %d) with %d internal pixels",
             __func__, threadId, ticket, tile.row, tile.col, ret);
         if (ret <= 10) {
+            enqueueEmptyResult(ticket, tileData);
             continue;
         }
         vec2f_t* anchorPtr = lookupTileAnchors(tile);
