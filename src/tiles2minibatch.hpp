@@ -409,6 +409,18 @@ protected:
 
     virtual void onWorkerStart(int threadId) { (void)threadId; }
 
+    void enqueueEmptyResult(int ticket, const TileData<T>& tileData) {
+        if (!useTicketSystem_) {
+            return;
+        }
+        ResultBuf empty(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+        resultQueue.push(std::move(empty));
+        if (outputAnchor_) {
+            ResultBuf emptyAnchor(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+            anchorQueue.push(std::move(emptyAnchor));
+        }
+    }
+
     void tileWorker(int threadId);
     void boundaryWorker(int threadId);
     void writerWorker();
