@@ -35,6 +35,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     int32_t icol_c = -1, icol_s = -1;
     int32_t coordDigits = 2, probDigits = 4;
     int32_t kOut = 0;
+    int32_t topK = 0;
     int32_t K = -1;
     float maxCellDiameter = 50;
     int32_t threads = 1;
@@ -72,6 +73,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("icol-c", "Cell ID column index, 0-based (for pix2cell)", icol_c)
       .add_option("icol-s", "Cell component column index, 0-based (for pix2cell)", icol_s)
       .add_option("k-out", "Number of top factors to output (for pix2cell)", kOut)
+      .add_option("top-k", "Number of top factors to output (for --annotate-pts)", topK)
       .add_option("max-cell-diameter", "Maximum cell diameter in microns (for pix2cell)", maxCellDiameter);
     pl.add_option("out", "Output prefix", outPrefix)
       .add_option("coord-digits", "Number of decimal digits to output for coordinates (for dump-tsv)", coordDigits)
@@ -172,7 +174,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         if (icol_x < 0 || icol_y < 0) {
             error("icol-x and icol-y for --annotate-pts must be specified");
         }
-        tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y, icol_z, annotateHeaderFile);
+        tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y, icol_z, annotateHeaderFile, topK);
         return 0;
     }
 

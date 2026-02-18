@@ -142,7 +142,7 @@ public:
     void merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep = {}, bool binaryOutput = false);
     void annotate(const std::string& ptPrefix, const std::string& outPrefix,
         uint32_t icol_x, uint32_t icol_y, int32_t icol_z = -1,
-        const std::string& headerFile = "");
+        const std::string& headerFile = "", int32_t top_k = 0);
 
     void pix2cell(const std::string& ptPrefix, const std::string& outPrefix,
         uint32_t icol_c, uint32_t icol_x, uint32_t icol_y,
@@ -247,10 +247,10 @@ private:
         size_t& count);
     void annotateTiles2D(const std::vector<TileKey>& tiles,
         TileReader& reader, uint32_t icol_x, uint32_t icol_y,
-        uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset);
+        uint32_t ntok, uint32_t top_k_out, FILE* fp, int fdIndex, long& currentOffset);
     void annotateTiles3D(const std::vector<TileKey>& tiles,
         TileReader& reader, uint32_t icol_x, uint32_t icol_y, uint32_t icol_z,
-        uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset);
+        uint32_t ntok, uint32_t top_k_out, FILE* fp, int fdIndex, long& currentOffset);
 
     struct DenseTile {
         TileKey key;

@@ -241,7 +241,7 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
 }
 
 void TileOperator::annotate(const std::string& ptPrefix, const std::string& outPrefix,
-    uint32_t icol_x, uint32_t icol_y, int32_t icol_z, const std::string& headerFile) {
+    uint32_t icol_x, uint32_t icol_y, int32_t icol_z, const std::string& headerFile, int32_t top_k) {
     std::string ptData = ptPrefix + ".tsv";
     std::string ptIndex = ptPrefix + ".index";
     TileReader reader(ptData, ptIndex);
@@ -260,6 +260,13 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
     uint32_t ntok = std::max(icol_x, icol_y);
     if (use3d) {ntok = std::max(ntok, (uint32_t) icol_z);}
     ntok += 1;
+    uint32_t topKOut = static_cast<uint32_t>(k_);
+    if (top_k > 0) {
+        topKOut = std::min<uint32_t>(topKOut, static_cast<uint32_t>(top_k));
+    }
+    if (topKOut == 0) {
+        error("%s: Invalid top_k value %d", __func__, top_k);
+    }
     // Header:
     // 1) If --annotate-header-file is set, use its first line as the base.
     // 2) Otherwise, use the first header line from the annotation points input.
@@ -294,7 +301,7 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
         for (size_t i = 4; i < headerCols.size(); ++i) {
             headerStr += "\t" + headerCols[i];
         }
-        for (uint32_t i = 1; i <= k_; ++i) {
+        for (uint32_t i = 1; i <= topKOut; ++i) {
             headerStr += "\tK" + std::to_string(i) + "\tP" + std::to_string(i);
         }
         fprintf(fp, "%s\n", headerStr.c_str());
@@ -309,9 +316,9 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
     std::vector<TileKey> tiles;
     reader.getTileList(tiles);
     if (use3d) {
-        annotateTiles3D(tiles, reader, icol_x, icol_y, (uint32_t) icol_z, ntok, fp, fdIndex, currentOffset);
+        annotateTiles3D(tiles, reader, icol_x, icol_y, (uint32_t) icol_z, ntok, topKOut, fp, fdIndex, currentOffset);
     } else {
-        annotateTiles2D(tiles, reader, icol_x, icol_y, ntok, fp, fdIndex, currentOffset);
+        annotateTiles2D(tiles, reader, icol_x, icol_y, ntok, topKOut, fp, fdIndex, currentOffset);
     }
 
     fclose(fp);
