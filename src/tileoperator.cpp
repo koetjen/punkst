@@ -311,6 +311,10 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
     IndexHeader idxHeader = formatInfo_;
     idxHeader.mode &= ~(0x7);
     idxHeader.recordSize = 0;
+    std::vector<uint32_t> outKvec{topKOut};
+    if (!idxHeader.packKvec(outKvec)) {
+        error("%s: Cannot pack top-k value %u into index header", __func__, topKOut);
+    }
     if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) error("Index header write error");
 
     std::vector<TileKey> tiles;
