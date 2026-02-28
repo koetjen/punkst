@@ -333,6 +333,7 @@ template<typename T>
 void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, vec2f_t* anchorPtr) {
     (void)anchorPtr;
     if (tileData.emptyInput()) {
+        Base::enqueueEmptyResult(ticket, tileData);
         return;
     }
     std::vector<AnchorPoint> anchors;
@@ -340,6 +341,7 @@ void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, 
     int32_t nAnchors = initAnchors(tileData, anchors, minibatch);
     debug("%s: Thread %d (ticket %d) initialized %d anchors", __func__, threadId, ticket, nAnchors);
     if (nAnchors <= 0) {
+        Base::enqueueEmptyResult(ticket, tileData);
         return;
     }
     double avgDegree = makeMinibatch(tileData, anchors, minibatch);
@@ -348,6 +350,7 @@ void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, 
     debug("%s: Thread %d (ticket %d) made minibatch with %zu pixels and average degree %.2f",
         __func__, threadId, ticket, nPixels, avgDegree);
     if (nPixels < 10) {
+        Base::enqueueEmptyResult(ticket, tileData);
         return;
     }
     PixelEM::EMstats stats;
