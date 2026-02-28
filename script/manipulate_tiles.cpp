@@ -11,6 +11,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     std::string inPrefix, inData, inIndex, outPrefix;
     std::vector<std::string> inMergeEmbFiles;
     std::string inMergePtsPrefix;
+    std::string annotateHeaderFile;
     int32_t tileSize = -1;
     bool binaryOut = false;
     bool isBinary = false;
@@ -34,6 +35,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     int32_t icol_c = -1, icol_s = -1;
     int32_t coordDigits = 2, probDigits = 4;
     int32_t kOut = 0;
+    int32_t topK = 0;
     int32_t K = -1;
     float maxCellDiameter = 50;
     int32_t threads = 1;
@@ -63,6 +65,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("annotate-cell", "Annotate factor composition per cell and subcellular component", cellAnno)
       .add_option("merge-emb", "List of embedding files to merge", inMergeEmbFiles)
       .add_option("annotate-pts", "Prefix of the data file to annotate", inMergePtsPrefix)
+      .add_option("annotate-header-file", "Use first line of this file as header base for --annotate-pts output", annotateHeaderFile)
       .add_option("k2keep", "Number of factors to keep from each source (merge only)", k2keep)
       .add_option("icol-x", "X coordinate column index, 0-based", icol_x)
       .add_option("icol-y", "Y coordinate column index, 0-based", icol_y)
@@ -70,6 +73,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("icol-c", "Cell ID column index, 0-based (for pix2cell)", icol_c)
       .add_option("icol-s", "Cell component column index, 0-based (for pix2cell)", icol_s)
       .add_option("k-out", "Number of top factors to output (for pix2cell)", kOut)
+      .add_option("top-k", "Number of top factors to output (for --annotate-pts)", topK)
       .add_option("max-cell-diameter", "Maximum cell diameter in microns (for pix2cell)", maxCellDiameter);
     pl.add_option("out", "Output prefix", outPrefix)
       .add_option("coord-digits", "Number of decimal digits to output for coordinates (for dump-tsv)", coordDigits)
@@ -170,7 +174,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         if (icol_x < 0 || icol_y < 0) {
             error("icol-x and icol-y for --annotate-pts must be specified");
         }
-        tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y);
+        tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y, icol_z, annotateHeaderFile, topK);
         return 0;
     }
 
