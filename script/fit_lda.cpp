@@ -18,6 +18,8 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     double defaultWeight = 1.;
     bool transform = false;
     bool sort_topics = false;
+    bool deterministic = false;
+    bool shuffle_10x = true;
     // --- Algorithm Parameters ---
     double kappa = 0.7, tau0 = 10.0;
     double alpha = -1., eta = -1.;
@@ -80,7 +82,9 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("min-count-train", "Minimum total feature count for a unit to be trained", minCountTrain)
       .add_option("modal", "Modality to use (0-based)", modal)
       .add_option("debug", "If >0, only process this many units", debug_)
-      .add_option("verbose", "Verbose level", verbose);
+      .add_option("verbose", "Verbose level", verbose)
+      .add_option("deterministic", "Enable strict reproducibility (force --threads 1 and deterministic 10X order)", deterministic)
+      .add_option("shuffle-10x", "Shuffle 10X training unit order each epoch", shuffle_10x);
 
     // Algorithm Hyperparameters (Model-Specific)
     pl.add_option("kappa", "(All) Learning decay rate", kappa)
@@ -134,9 +138,25 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     if (nEpochs <= 0) {
         nEpochs = 1;
     }
+    if (deterministic) {
+        if (seed <= 0) {
+            seed = 1;
+            notice("Deterministic mode: seed not provided, defaulting to %d", seed);
+        }
+        if (nThreads != 1) {
+            warning("Deterministic mode: forcing --threads 1 (received %d)", nThreads);
+            nThreads = 1;
+        }
+        if (shuffle_10x) {
+            warning("Deterministic mode: forcing --shuffle-10x false");
+            shuffle_10x = false;
+        }
+    }
     if (seed <= 0) {
         seed = std::random_device{}();
     }
+    notice("topic-model config: seed=%d threads=%d deterministic=%s shuffle-10x=%s",
+        seed, nThreads, deterministic ? "true" : "false", shuffle_10x ? "true" : "false");
     int32_t nUnits;
 
     // Check 10X input
@@ -224,7 +244,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
                 notice("Warm-start using %d units before introducing background", warmInitUnits);
                 int32_t nWarm = 0;
                 if (use_10x) {
-                    nWarm = lda4hex->trainOnline10X(batchSize, warmInitUnits, seed);
+                    nWarm = lda4hex->trainOnline10X(batchSize, warmInitUnits, seed, shuffle_10x);
                 } else {
                     nWarm = lda4hex->trainOnline(inFile, batchSize, minCountTrain, warmInitUnits);
                 }
@@ -276,7 +296,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         for (int epoch = 0; epoch < nEpochs; ++epoch) {
             int32_t n = 0;
             if (use_10x) {
-                n = model_runner->trainOnline10X(batchSize, maxUnits, seed + epoch);
+                n = model_runner->trainOnline10X(batchSize, maxUnits, seed + epoch, shuffle_10x);
             } else {
                 n = model_runner->trainOnline(inFile, batchSize, minCountTrain, maxUnits);
             }

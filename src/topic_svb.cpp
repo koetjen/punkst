@@ -66,7 +66,7 @@ void TopicModelWrapper::load10X(DGEReader10X& dge, int32_t _minCountTrain, bool 
     notice("%s: Loaded %d units, %d with total count >= %d for training", __func__, nUnits, nTrain, _minCountTrain);
 }
 
-int32_t TopicModelWrapper::trainOnline10X(int32_t _bsize, int32_t maxUnits, int32_t seed) {
+int32_t TopicModelWrapper::trainOnline10X(int32_t _bsize, int32_t maxUnits, int32_t seed, bool shuffle) {
     if (!initialized) error("Model must be initialized before training");
     if (!dge_cache_ready_) error("10X cache is not initialized; call load10X() first");
     batchSize = _bsize;
@@ -76,8 +76,10 @@ int32_t TopicModelWrapper::trainOnline10X(int32_t _bsize, int32_t maxUnits, int3
     }
 
     std::vector<int32_t> order = dge_train_idx_cache_;
-    std::mt19937 rng(static_cast<uint32_t>(seed));
-    std::shuffle(order.begin(), order.end(), rng);
+    if (shuffle) {
+        std::mt19937 rng(static_cast<uint32_t>(seed));
+        std::shuffle(order.begin(), order.end(), rng);
+    }
 
     size_t cursor = 0;
     while (cursor < order.size()) {
