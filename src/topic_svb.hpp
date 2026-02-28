@@ -24,7 +24,7 @@ public:
 
     int32_t trainOnline(const std::string& inFile, int32_t _bsize, int32_t _minCountTrain, int32_t maxUnits = INT32_MAX);
     void load10X(DGEReader10X& dge, int32_t _minCountTrain, bool force = false);
-    int32_t trainOnline10X(int32_t _bsize, int32_t maxUnits, int32_t seed);
+    int32_t trainOnline10X(int32_t _bsize, int32_t maxUnits, int32_t seed, bool shuffle = true);
     void fitAndWriteToFile10X(DGEReader10X& dge, const std::string& outPrefix, int32_t _bsize);
     // transform and writing results
     void fitAndWriteToFile(const std::string& inFile, const std::string& outPrefix, int32_t _bsize);
