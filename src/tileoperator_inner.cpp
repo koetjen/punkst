@@ -570,7 +570,7 @@ void TileOperator::mergeTiles3D(const std::set<TileKey>& commonTiles,
 
 void TileOperator::annotateTiles2D(const std::vector<TileKey>& tiles,
     TileReader& reader, uint32_t icol_x, uint32_t icol_y,
-    uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset) {
+    uint32_t ntok, uint32_t top_k_out, FILE* fp, int fdIndex, long& currentOffset) {
     notice("%s: Start annotating query with %lu tiles", __func__, tiles.size());
     float res = formatInfo_.pixelResolution;
     if (res <= 0) res = 1.0f;
@@ -605,8 +605,14 @@ void TileOperator::annotateTiles2D(const std::vector<TileKey>& tiles,
                 continue;
             }
             fprintf(fp, "%s", s.c_str());
-            for (size_t k = 0; k < pit->second.ks.size(); ++k) {
+            const size_t nWrite = std::min<size_t>(top_k_out,
+                std::min(pit->second.ks.size(), pit->second.ps.size()));
+            size_t k = 0;
+            for (; k < nWrite; ++k) {
                 fprintf(fp, "\t%d\t%.4e", pit->second.ks[k], pit->second.ps[k]);
+            }
+            for (; k < top_k_out; ++k) {
+                fprintf(fp, "\t-1\t0");
             }
             fprintf(fp, "\n");
             newEntry.n++;
@@ -622,7 +628,7 @@ void TileOperator::annotateTiles2D(const std::vector<TileKey>& tiles,
 
 void TileOperator::annotateTiles3D(const std::vector<TileKey>& tiles,
     TileReader& reader, uint32_t icol_x, uint32_t icol_y, uint32_t icol_z,
-    uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset) {
+    uint32_t ntok, uint32_t top_k_out, FILE* fp, int fdIndex, long& currentOffset) {
     notice("%s: Start annotating query with %lu tiles", __func__, tiles.size());
     float res = formatInfo_.pixelResolution;
     if (res <= 0) res = 1.0f;
@@ -661,8 +667,14 @@ void TileOperator::annotateTiles3D(const std::vector<TileKey>& tiles,
                 continue;
             }
             fprintf(fp, "%s", s.c_str());
-            for (size_t k = 0; k < pit->second.ks.size(); ++k) {
+            const size_t nWrite = std::min<size_t>(top_k_out,
+                std::min(pit->second.ks.size(), pit->second.ps.size()));
+            size_t k = 0;
+            for (; k < nWrite; ++k) {
                 fprintf(fp, "\t%d\t%.4e", pit->second.ks[k], pit->second.ps[k]);
+            }
+            for (; k < top_k_out; ++k) {
+                fprintf(fp, "\t-1\t0");
             }
             fprintf(fp, "\n");
             newEntry.n++;

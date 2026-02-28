@@ -240,7 +240,8 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
     notice("Merged %u files (%lu shared tiles) to %s", nSources, commonTiles.size(), outFile.c_str());
 }
 
-void TileOperator::annotate(const std::string& ptPrefix, const std::string& outPrefix, uint32_t icol_x, uint32_t icol_y, int32_t icol_z) {
+void TileOperator::annotate(const std::string& ptPrefix, const std::string& outPrefix,
+    uint32_t icol_x, uint32_t icol_y, int32_t icol_z, const std::string& headerFile, int32_t top_k) {
     std::string ptData = ptPrefix + ".tsv";
     std::string ptIndex = ptPrefix + ".index";
     TileReader reader(ptData, ptIndex);
@@ -259,10 +260,48 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
     uint32_t ntok = std::max(icol_x, icol_y);
     if (use3d) {ntok = std::max(ntok, (uint32_t) icol_z);}
     ntok += 1;
-    // Header?
-    if (!reader.headerLine.empty()) {
-        std::string headerStr = reader.headerLine;
-        for (uint32_t i = 1; i <= k_; ++i) {
+    uint32_t topKOut = static_cast<uint32_t>(k_);
+    if (top_k > 0) {
+        topKOut = std::min<uint32_t>(topKOut, static_cast<uint32_t>(top_k));
+    }
+    if (topKOut == 0) {
+        error("%s: Invalid top_k value %d", __func__, top_k);
+    }
+    // Header:
+    // 1) If --annotate-header-file is set, use its first line as the base.
+    // 2) Otherwise, use the first header line from the annotation points input.
+    std::string headerBase;
+    if (!headerFile.empty()) {
+        std::ifstream inHeader(headerFile);
+        if (!inHeader.is_open()) {
+            error("Cannot open header file %s", headerFile.c_str());
+        }
+        if (!std::getline(inHeader, headerBase)) {
+            error("Header file %s is empty", headerFile.c_str());
+        }
+        if (!headerBase.empty() && headerBase.back() == '\r') {
+            headerBase.pop_back();
+        }
+    } else if (!reader.headerLine.empty()) {
+        headerBase = reader.headerLine;
+        auto p = headerBase.find('\n');
+        if (p != std::string::npos) {
+            headerBase = headerBase.substr(0, p);
+        }
+    }
+    if (!headerBase.empty()) {
+        if (headerBase[0] == '#') {
+            headerBase.erase(0, 1);
+        }
+        std::vector<std::string> headerCols;
+        split(headerCols, "\t", headerBase, std::numeric_limits<uint32_t>::max(), true, false, true);
+
+        // Enforce required downstream schema prefix while preserving trailing columns.
+        std::string headerStr = "#x\ty\tfeature\tct";
+        for (size_t i = 4; i < headerCols.size(); ++i) {
+            headerStr += "\t" + headerCols[i];
+        }
+        for (uint32_t i = 1; i <= topKOut; ++i) {
             headerStr += "\tK" + std::to_string(i) + "\tP" + std::to_string(i);
         }
         fprintf(fp, "%s\n", headerStr.c_str());
@@ -277,9 +316,9 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
     std::vector<TileKey> tiles;
     reader.getTileList(tiles);
     if (use3d) {
-        annotateTiles3D(tiles, reader, icol_x, icol_y, (uint32_t) icol_z, ntok, fp, fdIndex, currentOffset);
+        annotateTiles3D(tiles, reader, icol_x, icol_y, (uint32_t) icol_z, ntok, topKOut, fp, fdIndex, currentOffset);
     } else {
-        annotateTiles2D(tiles, reader, icol_x, icol_y, ntok, fp, fdIndex, currentOffset);
+        annotateTiles2D(tiles, reader, icol_x, icol_y, ntok, topKOut, fp, fdIndex, currentOffset);
     }
 
     fclose(fp);
@@ -968,7 +1007,7 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
     IndexHeader idxHeader = formatInfo_;
     std::vector<uint32_t> outKvec{1};
     idxHeader.packKvec(outKvec);
-    idxHeader.mode = (K_ << 16) | (mode_ & 0x2) | 0x5;
+    idxHeader.mode = (K_ << 16) | (recCoordsInPixel ? 0x2 : 0x0) | 0x5;
     idxHeader.coordType = 1;
     idxHeader.recordSize = sizeof(int32_t) * 2 + sizeof(int32_t) + sizeof(float);
     if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
