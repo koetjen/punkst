@@ -9,6 +9,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     std::vector<std::string> inMergeEmbFiles;
     std::vector<std::string> mergeEmbPrefixes;
     std::string inMergePtsPrefix;
+    std::string annotateHeaderFile;
     bool mergeKeepAllMain = false;
     bool mergeKeepAll = false;
     bool annoKeepAll = false;
@@ -49,6 +50,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     int32_t icol_c = -1, icol_s = -1;
     int32_t coordDigits = 2, probDigits = 4;
     int32_t kOut = 0;
+    int32_t topK = 0;
     int32_t K = -1;
     int32_t focalK = -1;
     int32_t maskRadius = 0;
@@ -122,6 +124,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("null-k", "Placeholder printed for missing K values in TSV merge outputs", nullK)
       .add_option("null-p", "Placeholder printed for missing P values in TSV merge outputs", nullP)
       .add_option("annotate-pts", "Prefix of the data file to annotate", inMergePtsPrefix)
+      .add_option("annotate-header-file", "Use the first line of this file as the base header for --annotate-pts output", annotateHeaderFile)
       .add_option("anno-keep-all", "Keep all query records in annotate outputs and use placeholders for missing annotations", annoKeepAll)
       .add_option("annotate-cell", "Annotate factor composition per cell and subcellular component", cellAnno)
       .add_option("icol-x", "X coordinate column index, 0-based", icol_x)
@@ -135,6 +138,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("icol-c", "Cell ID column index, 0-based (for pix2cell)", icol_c)
       .add_option("icol-s", "Cell component column index, 0-based (for pix2cell)", icol_s)
       .add_option("k-out", "Number of top factors to output (for pix2cell)", kOut)
+      .add_option("top-k", "Number of top factors to output (for --annotate-pts)", topK)
       .add_option("max-cell-diameter", "Maximum cell diameter in microns (for pix2cell)", maxCellDiameter);
 
     // Factor-distribution summaries.
@@ -278,6 +282,12 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     if (dumpTSV && (hasExtractRegionZMin || hasExtractRegionZMax) && extractRegionGeoJSON.empty()) {
         error("--zmin/--zmax require --extract-region-geojson when used with --dump-tsv");
     }
+    if ((topK > 0 || !annotateHeaderFile.empty()) && inMergePtsPrefix.empty()) {
+        error("--top-k and --annotate-header-file require --annotate-pts");
+    }
+    if ((topK > 0 || !annotateHeaderFile.empty()) && !inMergeEmbFiles.empty()) {
+        error("--top-k and --annotate-header-file are currently supported only with --annotate-pts without --merge-emb");
+    }
 
     if (reorganize) {
         tileOp.reorgTiles(outPrefix, tileSize);
@@ -352,7 +362,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         if (hasFeatureIndex && icol_f < 0)
             error("valid --icol-feature is required for --annotate-pts on single-molecule input");
         tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y, icol_z,
-            icol_f, annoKeepAll, mergeEmbPrefixes, mltOptions);
+            icol_f, annoKeepAll, mergeEmbPrefixes, mltOptions, annotateHeaderFile, topK);
         return 0;
     }
 

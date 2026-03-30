@@ -207,7 +207,9 @@ public:
         int32_t icol_x, int32_t icol_y, int32_t icol_z,
         int32_t icol_f, bool annoKeepAll,
         const std::vector<std::string>& mergePrefixes,
-        const MltPmtilesOptions& mltOptions);
+        const MltPmtilesOptions& mltOptions,
+        const std::string& headerFile = "",
+        int32_t top_k = 0);
     void annotateMerged(const std::vector<std::string>& otherFiles,
         const std::string& ptPrefix, const std::string& outPrefix,
         std::vector<uint32_t> k2keep, int32_t icol_x, int32_t icol_y,
@@ -470,18 +472,20 @@ private:
     // Impl for annotate
     void annotateTiles2D(const std::vector<TileKey>& tiles,
         TileReader& reader, uint32_t icol_x, uint32_t icol_y,
-        uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset,
+        uint32_t ntok, uint32_t top_k_out, FILE* fp, int fdIndex, long& currentOffset,
         bool annoKeepAll);
     void annotateTiles3D(const std::vector<TileKey>& tiles,
         TileReader& reader, uint32_t icol_x, uint32_t icol_y, uint32_t icol_z,
-        uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset,
+        uint32_t ntok, uint32_t top_k_out, FILE* fp, int fdIndex, long& currentOffset,
         bool annoKeepAll);
     void annotateSingleMolecule(const std::string& ptPrefix,
         const std::string& outPrefix,
         int32_t icol_x, int32_t icol_y, int32_t icol_z,
         int32_t icol_f, bool annoKeepAll,
         const std::vector<std::string>& mergePrefixes,
-        const MltPmtilesOptions& mltOptions);
+        const MltPmtilesOptions& mltOptions,
+        const std::string& headerFile,
+        int32_t top_k);
     void annotateMergedSingleMolecule(const std::vector<std::string>& otherFiles,
         const std::string& ptPrefix, const std::string& outPrefix,
         std::vector<uint32_t> k2keep, int32_t icol_x, int32_t icol_y,
@@ -511,7 +515,7 @@ private:
         int32_t icol_z, int32_t icol_f, bool keepAllMain, bool keepAll,
         const std::vector<std::string>& mergePrefixes, bool annoKeepAll,
         const MltPmtilesOptions& mltOptions);
-    void appendTopProbsText(std::string& out, const TopProbs& probs) const;
+    void appendTopProbsText(std::string& out, const TopProbs& probs, uint32_t maxPairs = 0) const;
     void pix2cellSingleMolecule(const std::string& ptPrefix,
         const std::string& outPrefix,
         uint32_t icol_c, uint32_t icol_x, uint32_t icol_y,

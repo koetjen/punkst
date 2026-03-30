@@ -61,6 +61,10 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
         warning("%s: No tiles to process", __func__);
         return;
     }
+    // readNextRecord2DAsPixel() yields pixel-space coordinates for:
+    // 1) float-coordinate inputs, and
+    // 2) int-coordinate inputs marked as scaled (mode_ & 0x2).
+    const bool recCoordsInPixel = ((mode_ & 0x4) == 0) || ((mode_ & 0x2) != 0);
     std::string outFile = outPrefix + ".bin";
     std::string outIndex = outPrefix + ".index";
     int fdMain = open(outFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
@@ -76,7 +80,7 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
     IndexHeader idxHeader = formatInfo_;
     std::vector<uint32_t> outKvec{1};
     idxHeader.packKvec(outKvec);
-    idxHeader.mode = (K_ << 16) | (mode_ & 0x2) | 0x5;
+    idxHeader.mode = (K_ << 16) | (recCoordsInPixel ? 0x2u : 0x0u) | 0x5u;
     idxHeader.pixelResolution = getRasterPixelResolution();
     idxHeader.recordSize = sizeof(int32_t) * 2 + sizeof(int32_t) + sizeof(float);
     if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
