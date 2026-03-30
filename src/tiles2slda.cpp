@@ -337,6 +337,7 @@ void Tiles2SLDA<T>::onWorkerStart(int threadId) {
 template<typename T>
 void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket, vec2f_t* anchorPtr) {
     if (tileData.emptyInput()) {
+        Base::enqueueEmptyResult(ticket, tileData);
         return;
     }
     std::vector<AnchorPoint> anchors;
@@ -344,6 +345,7 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     int32_t nAnchors = initAnchorsHybrid(tileData, anchors, minibatch, anchorPtr);
 
     if (nAnchors == 0) {
+        Base::enqueueEmptyResult(ticket, tileData);
         return;
     }
     const size_t nObsInput = (Base::coordDim_ == MinibatchCoordDim::Dim3)
@@ -378,6 +380,7 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
         std::cout << "  " << std::accumulate(colsums.begin(), colsums.end(), 0.0f) / minibatch.n << " " << std::max_element(colsums.begin(), colsums.end())[0] << std::endl << std::flush;
     }
     if (nPixels < 10) {
+        Base::enqueueEmptyResult(ticket, tileData);
         return;
     }
     int32_t n_iter = 0;
