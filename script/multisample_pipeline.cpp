@@ -8,6 +8,7 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
     std::string jointPref = "";
     std::vector<std::string> inTsvList;
     int nThreads0 = 1, tileSize = -1;
+    int32_t seed = -1;
     int tileBuffer = 1000, batchSize = 10000;
     int debug = 0, verbose = 1000000;
     int icol_x, icol_y, icol_z = -1, icol_feature, icol_int;
@@ -40,6 +41,7 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
         .add_option("skip", "Number of lines to skip in the input file (default: 0)", nskip)
         .add_option("skip-last-is-header", "Treat the last skipped line as the header line", skip_last_is_header)
         .add_option("threads", "Number of threads to use (default: 1)", nThreads0)
+        .add_option("seed", "Random seed for randomized output keys", seed)
         .add_option("include-feature-regex", "Regex for including features", include_ftr_regex)
         .add_option("exclude-feature-regex", "Regex for excluding features", exclude_ftr_regex)
         .add_option("min-total-count-per-sample", "Minimum total gene count per sample (default: 1) to include in the joint model", minTotalCountPerSample);
@@ -396,7 +398,7 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
             lineParser parser(icol_x, icol_y, icol_feature, icol_ints, dfile);
             parser.setFeatureDict(featureDict);
             if (anchorList.size() != S || anchorList[s].empty()) {
-                Tiles2Hex tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, {minCtPerUnit});
+                Tiles2Hex tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, {minCtPerUnit}, seed);
                 if (!tiles2Hex.run()) {
                     error("Error running tiles2hex for sample %s", samples[s].c_str());
                 }
@@ -404,7 +406,7 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
             } else {
                 std::vector<std::string> localAnchor = {anchorList[s]};
                 std::vector<float> localRadius = {radius};
-                Tiles2UnitsByAnchor tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, localAnchor, localRadius, {minCtPerUnit}, noBackground);
+                Tiles2UnitsByAnchor tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, localAnchor, localRadius, {minCtPerUnit}, noBackground, seed);
                 if (!tiles2Hex.run()) {
                     error("Error running tiles2hex for sample %s", samples[s].c_str());
                 }

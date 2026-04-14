@@ -7,6 +7,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
+#include <numeric>
 #include <set>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -376,8 +377,12 @@ void TileOperator::annotateSingleMolecule(const std::string& ptPrefix,
     const std::string& outPrefix, int32_t icol_x, int32_t icol_y,
     int32_t icol_z, int32_t icol_f, bool annoKeepAll,
     const std::vector<std::string>& mergePrefixes,
-    const MltPmtilesOptions& mltOptions) {
+    const MltPmtilesOptions& mltOptions,
+    const std::string& headerFile, int32_t top_k) {
     if (mltOptions.enabled) {
+        if (!headerFile.empty() || top_k > 0) {
+            warning("%s: --annotate-header-file and --top-k are ignored with --write-mlt-pmtiles", __func__);
+        }
         annotateSingleMoleculeToMltPmtiles(ptPrefix, outPrefix, icol_x, icol_y, icol_z, icol_f, annoKeepAll, mergePrefixes, mltOptions);
         return;
     }
@@ -414,18 +419,73 @@ void TileOperator::annotateSingleMolecule(const std::string& ptPrefix,
     uint32_t ntok = static_cast<uint32_t>(std::max({icol_x, icol_y, icol_f}));
     if (use3d) {ntok = std::max(ntok, static_cast<uint32_t>(icol_z));}
     ntok += 1;
-    if (!reader.headerLine.empty()) {
-        std::string headerStr = reader.headerLine;
-        const std::vector<uint32_t> headerKvec = kvec_.empty()
-            ? std::vector<uint32_t>{static_cast<uint32_t>(std::max(0, k_))}
-            : kvec_;
-        for (const auto& colName : build_merge_column_names(headerKvec, mergePrefixes)) {
+
+    const std::vector<uint32_t> sourceKvec = kvec_.empty()
+        ? std::vector<uint32_t>{static_cast<uint32_t>(std::max(0, k_))}
+        : kvec_;
+    if (!mergePrefixes.empty() && mergePrefixes.size() != sourceKvec.size()) {
+        error("%s: expected %zu merge prefixes, got %zu", __func__, sourceKvec.size(), mergePrefixes.size());
+    }
+    const uint32_t totalTopK = std::accumulate(sourceKvec.begin(), sourceKvec.end(), static_cast<uint32_t>(0));
+    uint32_t topKOut = totalTopK;
+    if (top_k > 0) {
+        topKOut = std::min<uint32_t>(topKOut, static_cast<uint32_t>(top_k));
+    }
+    if (topKOut == 0) {
+        error("%s: Invalid top-k=%d (available=%u)", __func__, top_k, totalTopK);
+    }
+
+    std::vector<uint32_t> headerKvec;
+    std::vector<std::string> headerPrefixes;
+    headerKvec.reserve(sourceKvec.size());
+    if (!mergePrefixes.empty()) {
+        headerPrefixes.reserve(sourceKvec.size());
+    }
+    uint32_t rem = topKOut;
+    for (size_t i = 0; i < sourceKvec.size() && rem > 0; ++i) {
+        const uint32_t take = std::min(sourceKvec[i], rem);
+        if (take == 0) {
+            continue;
+        }
+        headerKvec.push_back(take);
+        if (!mergePrefixes.empty()) {
+            headerPrefixes.push_back(mergePrefixes[i]);
+        }
+        rem -= take;
+    }
+    if (headerKvec.empty()) {
+        error("%s: No output factor columns selected", __func__);
+    }
+
+    std::string headerBase = reader.headerLine;
+    if (!headerFile.empty()) {
+        std::ifstream headerIn(headerFile);
+        if (!headerIn.is_open()) {
+            error("%s: Cannot open header file %s", __func__, headerFile.c_str());
+        }
+        if (!std::getline(headerIn, headerBase)) {
+            error("%s: Header file %s is empty", __func__, headerFile.c_str());
+        }
+    }
+    if (!headerBase.empty()) {
+        const size_t nl = headerBase.find_first_of("\r\n");
+        if (nl != std::string::npos) {
+            headerBase.resize(nl);
+        }
+    }
+
+    size_t headerBytes = 0;
+    if (!headerBase.empty()) {
+        std::string headerStr = headerBase;
+        const auto& headerPrefixView = mergePrefixes.empty() ? mergePrefixes : headerPrefixes;
+        for (const auto& colName : build_merge_column_names(headerKvec, headerPrefixView)) {
             headerStr += "\t" + colName;
         }
         std::fprintf(fp, "%s\n", headerStr.c_str());
+        headerBytes = headerStr.size() + 1;
     }
     long currentOffset = writeStdout
-        ? static_cast<long>(reader.headerLine.empty() ? 0 : (reader.headerLine.size() + 1))
+        ? static_cast<long>(headerBytes)
         : std::ftell(fp);
 
     IndexHeader idxHeader = formatInfo_;
@@ -445,12 +505,12 @@ void TileOperator::annotateSingleMolecule(const std::string& ptPrefix,
         if (use3d) {
             result.n = annotateSingleTile3DShared(reader, tile, tileStream,
                 featureIndex, ntok, icol_x, icol_y, icol_z, icol_f, resXY, resZ,
-                annoKeepAll, static_cast<uint32_t>(k_),
+                annoKeepAll, topKOut,
                 [&](const std::string& line, const std::vector<std::string>&,
                     const std::string&, bool, uint32_t, float, float, float,
                     int32_t, int32_t, int32_t, const TopProbs& probs) {
                     result.textData += line;
-                    appendTopProbsText(result.textData, probs);
+                    appendTopProbsText(result.textData, probs, topKOut);
                     result.textData.push_back('\n');
                     return true;
                 },
@@ -460,12 +520,12 @@ void TileOperator::annotateSingleMolecule(const std::string& ptPrefix,
 
         result.n = annotateSingleTile2DShared(reader, tile, tileStream,
             featureIndex, ntok, icol_x, icol_y, icol_f, resXY,
-            annoKeepAll, static_cast<uint32_t>(k_),
+            annoKeepAll, topKOut,
             [&](const std::string& line, const std::vector<std::string>&,
                 const std::string&, bool, uint32_t, float, float, int32_t, int32_t,
                 const TopProbs& probs) {
                 result.textData += line;
-                appendTopProbsText(result.textData, probs);
+                appendTopProbsText(result.textData, probs, topKOut);
                 result.textData.push_back('\n');
                 return true;
             },

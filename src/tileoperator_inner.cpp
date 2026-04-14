@@ -819,7 +819,7 @@ void TileOperator::mergeTiles3D(const std::vector<TileKey>& mainTiles,
 
 void TileOperator::annotateTiles2D(const std::vector<TileKey>& tiles,
     TileReader& reader, uint32_t icol_x, uint32_t icol_y,
-    uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset,
+    uint32_t ntok, uint32_t top_k_out, FILE* fp, int fdIndex, long& currentOffset,
     bool annoKeepAll) {
     const char* funcName = __func__;
     notice("%s: Start annotating query with %lu tiles", funcName, tiles.size());
@@ -830,11 +830,11 @@ void TileOperator::annotateTiles2D(const std::vector<TileKey>& tiles,
         result.tile = tile;
         result.n = annotateTile2DPlainShared(reader, tile, tileStream,
             ntok, static_cast<int32_t>(icol_x), static_cast<int32_t>(icol_y), res,
-            annoKeepAll, static_cast<uint32_t>(k_),
+            annoKeepAll, top_k_out,
             [&](const std::string& line, const std::vector<std::string>&,
                 float, float, int32_t, int32_t, const TopProbs& probs) {
                 result.textData += line;
-                appendTopProbsText(result.textData, probs);
+                appendTopProbsText(result.textData, probs, top_k_out);
                 result.textData.push_back('\n');
                 return true;
             },
@@ -854,7 +854,7 @@ void TileOperator::annotateTiles2D(const std::vector<TileKey>& tiles,
 
 void TileOperator::annotateTiles3D(const std::vector<TileKey>& tiles,
     TileReader& reader, uint32_t icol_x, uint32_t icol_y, uint32_t icol_z,
-    uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset,
+    uint32_t ntok, uint32_t top_k_out, FILE* fp, int fdIndex, long& currentOffset,
     bool annoKeepAll) {
     const char* funcName = __func__;
     notice("%s: Start annotating query with %lu tiles", funcName, tiles.size());
@@ -866,12 +866,12 @@ void TileOperator::annotateTiles3D(const std::vector<TileKey>& tiles,
         result.n = annotateTile3DPlainShared(reader, tile, tileStream,
             ntok, static_cast<int32_t>(icol_x), static_cast<int32_t>(icol_y),
             static_cast<int32_t>(icol_z), res, res,
-            annoKeepAll, static_cast<uint32_t>(k_),
+            annoKeepAll, top_k_out,
             [&](const std::string& line, const std::vector<std::string>&,
                 float, float, float, int32_t, int32_t, int32_t,
                 const TopProbs& probs) {
                 result.textData += line;
-                appendTopProbsText(result.textData, probs);
+                appendTopProbsText(result.textData, probs, top_k_out);
                 result.textData.push_back('\n');
                 return true;
             },
