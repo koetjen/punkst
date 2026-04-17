@@ -516,6 +516,10 @@ private:
         const std::vector<std::string>& mergePrefixes, bool annoKeepAll,
         const MltPmtilesOptions& mltOptions);
     void appendTopProbsText(std::string& out, const TopProbs& probs, uint32_t maxPairs = 0) const;
+    std::string buildCanonicalAnnotateHeader(const std::string& headerBase,
+        bool use3d, bool includeFeatureCount,
+        const std::vector<uint32_t>& headerKvec,
+        const std::vector<std::string>& headerPrefixes) const;
     void pix2cellSingleMolecule(const std::string& ptPrefix,
         const std::string& outPrefix,
         uint32_t icol_c, uint32_t icol_x, uint32_t icol_y,

@@ -476,11 +476,9 @@ void TileOperator::annotateSingleMolecule(const std::string& ptPrefix,
 
     size_t headerBytes = 0;
     if (!headerBase.empty()) {
-        std::string headerStr = headerBase;
         const auto& headerPrefixView = mergePrefixes.empty() ? mergePrefixes : headerPrefixes;
-        for (const auto& colName : build_merge_column_names(headerKvec, headerPrefixView)) {
-            headerStr += "\t" + colName;
-        }
+        std::string headerStr = buildCanonicalAnnotateHeader(
+            headerBase, use3d, icol_f >= 0, headerKvec, headerPrefixView);
         std::fprintf(fp, "%s\n", headerStr.c_str());
         headerBytes = headerStr.size() + 1;
     }

@@ -202,6 +202,46 @@ void TileOperator::appendTopProbsText(std::string& out, const TopProbs& probs, u
     }
 }
 
+std::string TileOperator::buildCanonicalAnnotateHeader(const std::string& headerBase,
+    bool use3d, bool includeFeatureCount,
+    const std::vector<uint32_t>& headerKvec,
+    const std::vector<std::string>& headerPrefixes) const {
+    if (headerBase.empty()) {
+        return "";
+    }
+
+    std::string headerLine = headerBase;
+    const size_t nl = headerLine.find_first_of("\r\n");
+    if (nl != std::string::npos) {
+        headerLine.resize(nl);
+    }
+    if (headerLine.empty()) {
+        return "";
+    }
+
+    std::string headerStr;
+    if (includeFeatureCount) {
+        if (headerLine[0] == '#') {
+            headerLine.erase(0, 1);
+        }
+        std::vector<std::string> headerCols;
+        split(headerCols, "\t", headerLine, std::numeric_limits<uint32_t>::max(), true, false, true);
+
+        headerStr = use3d ? "#x\ty\tz\tfeature\tct" : "#x\ty\tfeature\tct";
+        const size_t keepFrom = use3d ? 5 : 4;
+        for (size_t i = keepFrom; i < headerCols.size(); ++i) {
+            headerStr += "\t" + headerCols[i];
+        }
+    } else {
+        headerStr = headerLine;
+    }
+
+    for (const auto& colName : build_merge_column_names(headerKvec, headerPrefixes)) {
+        headerStr += "\t" + colName;
+    }
+    return headerStr;
+}
+
 void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep, bool binaryOutput, bool keepAllMain, bool keepAll, const std::vector<std::string>& mergePrefixes) {
     if (hasFeatureIndex()) {
         mergeSingleMolecule(otherFiles, outPrefix, std::move(k2keep), binaryOutput, keepAllMain, keepAll, mergePrefixes);
@@ -571,11 +611,9 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
 
     size_t headerBytes = 0;
     if (!headerBase.empty()) {
-        std::string headerStr = headerBase;
         const auto& headerPrefixView = mergePrefixes.empty() ? mergePrefixes : headerPrefixes;
-        for (const auto& colName : build_merge_column_names(headerKvec, headerPrefixView)) {
-            headerStr += "\t" + colName;
-        }
+        std::string headerStr = buildCanonicalAnnotateHeader(
+            headerBase, use3d, icol_f >= 0, headerKvec, headerPrefixView);
         fprintf(fp, "%s\n", headerStr.c_str());
         headerBytes = headerStr.size() + 1;
     }
