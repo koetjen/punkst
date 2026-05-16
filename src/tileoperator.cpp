@@ -105,6 +105,335 @@ inline void spatialAccumulateEdge(SpatialMetricsAccum& m, uint8_t a, uint8_t b) 
     else if (b == BG && a < BG) m.perim_bg[a]++;
 }
 
+struct GridPoint {
+    int32_t x = 0;
+    int32_t y = 0;
+
+    bool operator==(const GridPoint& other) const {
+        return x == other.x && y == other.y;
+    }
+};
+
+struct RingInfo {
+    std::vector<GridPoint> ring;
+    double area = 0.0;
+    Rectangle<int32_t> bounds;
+};
+
+uint64_t packGridPointKey(int32_t x, int32_t y) {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32)
+         | static_cast<uint32_t>(y);
+}
+
+GridPoint unpackGridPointKey(uint64_t key) {
+    return GridPoint{
+        static_cast<int32_t>(key >> 32),
+        static_cast<int32_t>(key & 0xFFFFFFFFu)
+    };
+}
+
+double signedRingArea(const std::vector<GridPoint>& ring) {
+    if (ring.size() < 4) {
+        return 0.0;
+    }
+    long double twiceArea = 0.0;
+    for (size_t i = 0; i + 1 < ring.size(); ++i) {
+        twiceArea += static_cast<long double>(ring[i].x) * static_cast<long double>(ring[i + 1].y)
+                   - static_cast<long double>(ring[i + 1].x) * static_cast<long double>(ring[i].y);
+    }
+    return static_cast<double>(0.5L * twiceArea);
+}
+
+Rectangle<int32_t> ringBounds(const std::vector<GridPoint>& ring) {
+    Rectangle<int32_t> out;
+    for (const auto& pt : ring) {
+        out.extendToInclude(pt.x, pt.y);
+    }
+    return out;
+}
+
+std::vector<GridPoint> simplifyAxisAlignedRing(const std::vector<GridPoint>& ring) {
+    if (ring.size() <= 4 || ring.front() != ring.back()) {
+        return ring;
+    }
+    const size_t n = ring.size() - 1;
+    if (n < 3) {
+        return ring;
+    }
+    std::vector<GridPoint> simplified;
+    simplified.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        const GridPoint& prev = ring[(i + n - 1) % n];
+        const GridPoint& curr = ring[i];
+        const GridPoint& next = ring[(i + 1) % n];
+        const int32_t dx1 = curr.x - prev.x;
+        const int32_t dy1 = curr.y - prev.y;
+        const int32_t dx2 = next.x - curr.x;
+        const int32_t dy2 = next.y - curr.y;
+        const bool collinear = (dx1 == 0 && dx2 == 0) || (dy1 == 0 && dy2 == 0);
+        if (!collinear) {
+            simplified.push_back(curr);
+        }
+    }
+    if (simplified.empty()) {
+        return ring;
+    }
+    simplified.push_back(simplified.front());
+    return simplified;
+}
+
+bool pointInRing(const std::vector<GridPoint>& ring, double x, double y) {
+    bool inside = false;
+    if (ring.size() < 4) {
+        return false;
+    }
+    for (size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++) {
+        const double xi = static_cast<double>(ring[i].x);
+        const double yi = static_cast<double>(ring[i].y);
+        const double xj = static_cast<double>(ring[j].x);
+        const double yj = static_cast<double>(ring[j].y);
+        const bool intersects = ((yi > y) != (yj > y))
+            && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+        if (intersects) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+
+std::pair<double, double> ringInteriorSamplePoint(const RingInfo& ring) {
+    if (ring.ring.size() < 2) {
+        return std::make_pair(static_cast<double>(ring.bounds.xmin) + 0.5,
+                              static_cast<double>(ring.bounds.ymin) + 0.5);
+    }
+    for (size_t i = 0; i + 1 < ring.ring.size(); ++i) {
+        const GridPoint& a = ring.ring[i];
+        const GridPoint& b = ring.ring[i + 1];
+        const int32_t dx = b.x - a.x;
+        const int32_t dy = b.y - a.y;
+        const int32_t len = std::max(std::abs(dx), std::abs(dy));
+        if (len <= 0) {
+            continue;
+        }
+        const double mx = 0.5 * static_cast<double>(a.x + b.x);
+        const double my = 0.5 * static_cast<double>(a.y + b.y);
+        const double nx = -static_cast<double>(dy) / static_cast<double>(len);
+        const double ny = static_cast<double>(dx) / static_cast<double>(len);
+        if (ring.area < 0) {
+            return std::make_pair(mx + 0.25 * nx, my + 0.25 * ny);
+        }
+        return std::make_pair(mx - 0.25 * nx, my - 0.25 * ny);
+    }
+    return std::make_pair(static_cast<double>(ring.bounds.xmin) + 0.5,
+                          static_cast<double>(ring.bounds.ymin) + 0.5);
+}
+
+nlohmann::json ringToGeoJson(const std::vector<GridPoint>& ring) {
+    nlohmann::json coords = nlohmann::json::array();
+    for (const auto& pt : ring) {
+        coords.push_back({pt.x, pt.y});
+    }
+    return coords;
+}
+
+nlohmann::json buildComponentGeometry(const std::vector<GridPoint>& pixels,
+    int32_t minX, int32_t maxX, int32_t minY, int32_t maxY) {
+    if (pixels.empty()) {
+        return {
+            {"type", "Polygon"},
+            {"coordinates", nlohmann::json::array()}
+        };
+    }
+
+    const uint64_t width64 = static_cast<uint64_t>(static_cast<int64_t>(maxX) - static_cast<int64_t>(minX) + 1);
+    const uint64_t height64 = static_cast<uint64_t>(static_cast<int64_t>(maxY) - static_cast<int64_t>(minY) + 1);
+    if (width64 == 0 || height64 == 0) {
+        error("Invalid connected-component bounding box for GeoJSON export");
+    }
+    if (width64 > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) / height64) {
+        error("Connected-component bounding box is too large for GeoJSON export");
+    }
+    const size_t width = static_cast<size_t>(width64);
+    const size_t height = static_cast<size_t>(height64);
+    std::vector<uint8_t> mask(width * height, 0);
+    for (const auto& pix : pixels) {
+        const int64_t lx64 = static_cast<int64_t>(pix.x) - static_cast<int64_t>(minX);
+        const int64_t ly64 = static_cast<int64_t>(pix.y) - static_cast<int64_t>(minY);
+        if (lx64 < 0 || ly64 < 0
+            || lx64 >= static_cast<int64_t>(width)
+            || ly64 >= static_cast<int64_t>(height)) {
+            error("Connected-component pixel falls outside of its bounding box");
+        }
+        mask[static_cast<size_t>(ly64) * width + static_cast<size_t>(lx64)] = 1;
+    }
+
+    auto hasPixel = [&](int64_t x, int64_t y) -> bool {
+        if (x < 0 || y < 0
+            || x >= static_cast<int64_t>(width)
+            || y >= static_cast<int64_t>(height)) {
+            return false;
+        }
+        return mask[static_cast<size_t>(y) * width + static_cast<size_t>(x)] != 0;
+    };
+
+    std::unordered_map<uint64_t, uint64_t> nextByStart;
+    auto addEdge = [&](int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
+        const uint64_t start = packGridPointKey(x0, y0);
+        const uint64_t end = packGridPointKey(x1, y1);
+        if (!nextByStart.emplace(start, end).second) {
+            error("Connected-component polygonization encountered an ambiguous boundary vertex");
+        }
+    };
+
+    for (const auto& pix : pixels) {
+        const int64_t lx = static_cast<int64_t>(pix.x) - static_cast<int64_t>(minX);
+        const int64_t ly = static_cast<int64_t>(pix.y) - static_cast<int64_t>(minY);
+        if (!hasPixel(lx, ly - 1)) {
+            addEdge(pix.x, pix.y, pix.x + 1, pix.y);
+        }
+        if (!hasPixel(lx + 1, ly)) {
+            addEdge(pix.x + 1, pix.y, pix.x + 1, pix.y + 1);
+        }
+        if (!hasPixel(lx, ly + 1)) {
+            addEdge(pix.x + 1, pix.y + 1, pix.x, pix.y + 1);
+        }
+        if (!hasPixel(lx - 1, ly)) {
+            addEdge(pix.x, pix.y + 1, pix.x, pix.y);
+        }
+    }
+
+    std::vector<RingInfo> rings;
+    rings.reserve(4);
+    while (!nextByStart.empty()) {
+        const uint64_t start = nextByStart.begin()->first;
+        uint64_t current = start;
+        std::vector<GridPoint> ring;
+        ring.reserve(64);
+        ring.push_back(unpackGridPointKey(start));
+        const size_t maxSteps = nextByStart.size() + 1;
+        size_t steps = 0;
+        while (true) {
+            auto it = nextByStart.find(current);
+            if (it == nextByStart.end()) {
+                error("Connected-component polygonization found an open boundary");
+            }
+            const uint64_t next = it->second;
+            nextByStart.erase(it);
+            ring.push_back(unpackGridPointKey(next));
+            current = next;
+            ++steps;
+            if (current == start) {
+                break;
+            }
+            if (steps > maxSteps) {
+                error("Connected-component polygonization exceeded the boundary edge budget");
+            }
+        }
+
+        RingInfo info;
+        info.ring = simplifyAxisAlignedRing(ring);
+        info.area = signedRingArea(info.ring);
+        info.bounds = ringBounds(info.ring);
+        if (std::abs(info.area) < 0.5) {
+            error("Connected-component polygonization produced a degenerate ring");
+        }
+        rings.push_back(std::move(info));
+    }
+
+    std::vector<size_t> outerIdx;
+    std::vector<size_t> holeIdx;
+    outerIdx.reserve(rings.size());
+    holeIdx.reserve(rings.size());
+    for (size_t i = 0; i < rings.size(); ++i) {
+        if (rings[i].area > 0) {
+            outerIdx.push_back(i);
+        } else if (rings[i].area < 0) {
+            holeIdx.push_back(i);
+        }
+    }
+    if (outerIdx.empty() && !rings.empty()) {
+        size_t best = 0;
+        double bestAbsArea = 0.0;
+        for (size_t i = 0; i < rings.size(); ++i) {
+            const double absArea = std::abs(rings[i].area);
+            if (absArea > bestAbsArea) {
+                bestAbsArea = absArea;
+                best = i;
+            }
+        }
+        if (rings[best].area < 0) {
+            std::reverse(rings[best].ring.begin(), rings[best].ring.end());
+            rings[best].area = -rings[best].area;
+        }
+        outerIdx.push_back(best);
+        holeIdx.clear();
+        for (size_t i = 0; i < rings.size(); ++i) {
+            if (i != best && rings[i].area < 0) {
+                holeIdx.push_back(i);
+            }
+        }
+    }
+
+    std::vector<nlohmann::json> polygons;
+    polygons.reserve(outerIdx.size());
+    std::vector<Rectangle<int32_t>> outerBounds;
+    outerBounds.reserve(outerIdx.size());
+    for (size_t idx : outerIdx) {
+        nlohmann::json poly = nlohmann::json::array();
+        poly.push_back(ringToGeoJson(rings[idx].ring));
+        polygons.push_back(std::move(poly));
+        outerBounds.push_back(rings[idx].bounds);
+    }
+
+    for (size_t hole : holeIdx) {
+        const auto sample = ringInteriorSamplePoint(rings[hole]);
+        size_t bestOuter = std::numeric_limits<size_t>::max();
+        int64_t bestArea = std::numeric_limits<int64_t>::max();
+        for (size_t oi = 0; oi < outerIdx.size(); ++oi) {
+            const auto& box = outerBounds[oi];
+            if (rings[hole].bounds.xmin < box.xmin || rings[hole].bounds.xmax > box.xmax
+                || rings[hole].bounds.ymin < box.ymin || rings[hole].bounds.ymax > box.ymax) {
+                continue;
+            }
+            if (!pointInRing(rings[outerIdx[oi]].ring, sample.first, sample.second)) {
+                continue;
+            }
+            const int64_t boxArea = static_cast<int64_t>(box.xmax - box.xmin)
+                                  * static_cast<int64_t>(box.ymax - box.ymin);
+            if (boxArea < bestArea) {
+                bestArea = boxArea;
+                bestOuter = oi;
+            }
+        }
+        if (bestOuter == std::numeric_limits<size_t>::max()) {
+            bestOuter = 0;
+        }
+        polygons[bestOuter].push_back(ringToGeoJson(rings[hole].ring));
+    }
+
+    if (polygons.empty()) {
+        return {
+            {"type", "Polygon"},
+            {"coordinates", nlohmann::json::array()}
+        };
+    }
+    if (polygons.size() == 1) {
+        return {
+            {"type", "Polygon"},
+            {"coordinates", polygons.front()}
+        };
+    }
+
+    nlohmann::json coords = nlohmann::json::array();
+    for (auto& poly : polygons) {
+        coords.push_back(poly);
+    }
+    return {
+        {"type", "MultiPolygon"},
+        {"coordinates", coords}
+    };
+}
+
 } // namespace
 
 void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep, bool binaryOutput) {
@@ -1345,7 +1674,8 @@ void TileOperator::spatialMetricsBasic(const std::string& outPrefix) {
     }
 }
 
-void TileOperator::connectedComponents(const std::string& outPrefix, uint32_t minSize) {
+void TileOperator::connectedComponents(const std::string& outPrefix, uint32_t minSize,
+    bool writeGeoJson) {
     if (blocks_.empty()) {
         warning("%s: No tiles to process", __func__);
         return;
@@ -1359,6 +1689,7 @@ void TileOperator::connectedComponents(const std::string& outPrefix, uint32_t mi
     const int32_t K = K_;
     const uint8_t BG = static_cast<uint8_t>(K);
     const uint32_t INVALID = std::numeric_limits<uint32_t>::max();
+    const size_t NO_CC = std::numeric_limits<size_t>::max();
     const auto tStage1Start = std::chrono::steady_clock::now();
 
     std::vector<TileCCL> perTile(blocks_.size());
@@ -1414,16 +1745,26 @@ void TileOperator::connectedComponents(const std::string& outPrefix, uint32_t mi
         uint64_t sumX = 0;
         uint64_t sumY = 0;
         PixBox box;
+        bool fromBorder = false;
+        size_t tileIdx = NO_CC;
+        uint32_t localCid = INVALID;
+        size_t borderRoot = NO_CC;
     };
     std::vector<std::vector<CCOutRec>> perLabelComponents(static_cast<size_t>(K));
     std::vector<std::unordered_map<uint64_t, uint64_t>> perLabelHist(static_cast<size_t>(K));
+    std::vector<std::vector<size_t>> localOldToCcIdx(blocks_.size());
     auto addFinalComponent = [&](uint8_t lbl, uint64_t size,
                                  uint64_t sumX, uint64_t sumY,
-                                 const PixBox& box) {
+                                 const PixBox& box,
+                                 bool fromBorder,
+                                 size_t tileIdx,
+                                 uint32_t localCid,
+                                 size_t borderRoot) {
         if (lbl >= BG || size == 0) return;
         perLabelHist[static_cast<size_t>(lbl)][size] += 1;
         if (size >= static_cast<uint64_t>(minSize)) {
-            perLabelComponents[static_cast<size_t>(lbl)].push_back(CCOutRec{size, sumX, sumY, box});
+            perLabelComponents[static_cast<size_t>(lbl)].push_back(
+                CCOutRec{size, sumX, sumY, box, fromBorder, tileIdx, localCid, borderRoot});
         }
     };
 
@@ -1433,6 +1774,7 @@ void TileOperator::connectedComponents(const std::string& outPrefix, uint32_t mi
         auto& t = perTile[i];
         if (t.ncomp == 0) continue;
         const BorderRemapInfo remapInfo = remapTileToBorderComponents(t, INVALID);
+        localOldToCcIdx[i].assign(remapInfo.remap.size(), NO_CC);
         for (uint32_t cid = 0; cid < remapInfo.remap.size(); ++cid) {
             if (remapInfo.remap[cid] != INVALID) continue;
             addFinalComponent(
@@ -1440,7 +1782,11 @@ void TileOperator::connectedComponents(const std::string& outPrefix, uint32_t mi
                 static_cast<uint64_t>(remapInfo.oldCompSize[cid]),
                 remapInfo.oldCompSumX[cid],
                 remapInfo.oldCompSumY[cid],
-                remapInfo.oldCompBox[cid]);
+                remapInfo.oldCompBox[cid],
+                false,
+                i,
+                cid,
+                NO_CC);
         }
     }
     const auto tStage15End = std::chrono::steady_clock::now();
@@ -1448,6 +1794,10 @@ void TileOperator::connectedComponents(const std::string& outPrefix, uint32_t mi
     // Stage 2: seam union on border-touching components only
     const auto tStage2Start = std::chrono::steady_clock::now();
     const BorderDSUState dsuState = mergeBorderComponentsWithDSU(perTile, BG, INVALID);
+    std::vector<size_t> rootToCcIdx;
+    if (writeGeoJson) {
+        rootToCcIdx.assign(dsuState.rootSize.size(), NO_CC);
+    }
     for (size_t i = 0; i < dsuState.rootSize.size(); ++i) {
         if (dsuState.rootSize[i] == 0 || dsuState.rootLabel[i] >= BG) continue;
         addFinalComponent(
@@ -1455,7 +1805,11 @@ void TileOperator::connectedComponents(const std::string& outPrefix, uint32_t mi
             dsuState.rootSize[i],
             dsuState.rootSumX[i],
             dsuState.rootSumY[i],
-            dsuState.rootBox[i]);
+            dsuState.rootBox[i],
+            true,
+            NO_CC,
+            INVALID,
+            i);
     }
     const auto tStage2End = std::chrono::steady_clock::now();
     const auto stage1Ms = std::chrono::duration_cast<std::chrono::milliseconds>(tStage1End - tStage1Start).count();
@@ -1495,6 +1849,20 @@ void TileOperator::connectedComponents(const std::string& outPrefix, uint32_t mi
                 vec[i].box.maxX,
                 vec[i].box.minY,
                 vec[i].box.maxY);
+            if (writeGeoJson) {
+                if (vec[i].fromBorder) {
+                    if (vec[i].borderRoot >= rootToCcIdx.size()) {
+                        error("%s: Border root index out of range", __func__);
+                    }
+                    rootToCcIdx[vec[i].borderRoot] = i;
+                } else {
+                    if (vec[i].tileIdx >= localOldToCcIdx.size()
+                        || vec[i].localCid >= localOldToCcIdx[vec[i].tileIdx].size()) {
+                        error("%s: Tile-local component index out of range", __func__);
+                    }
+                    localOldToCcIdx[vec[i].tileIdx][vec[i].localCid] = i;
+                }
+            }
         }
     }
     fclose(fpCc);
@@ -1517,6 +1885,126 @@ void TileOperator::connectedComponents(const std::string& outPrefix, uint32_t mi
     }
     fclose(fpHist);
     notice("%s: Wrote connected component size histogram to %s", __func__, outHist.c_str());
+
+    if (writeGeoJson) {
+        std::vector<std::vector<std::vector<GridPoint>>> componentPixels(static_cast<size_t>(K));
+        for (int32_t k = 0; k < K; ++k) {
+            auto& dst = componentPixels[static_cast<size_t>(k)];
+            const auto& src = perLabelComponents[static_cast<size_t>(k)];
+            dst.resize(src.size());
+            for (size_t i = 0; i < src.size(); ++i) {
+                if (src[i].size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+                    error("%s: Connected-component is too large to buffer for GeoJSON export", __func__);
+                }
+                dst[i].reserve(static_cast<size_t>(src[i].size));
+            }
+        }
+
+        std::ifstream in;
+        if (mode_ & 0x1) {
+            in.open(dataFile_, std::ios::binary);
+        } else {
+            in.open(dataFile_);
+        }
+        if (!in.is_open()) {
+            error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+        }
+
+        uint64_t geoOutOfRangeIgnored = 0;
+        uint64_t geoBadLabelIgnored = 0;
+        for (size_t bi = 0; bi < blocks_.size(); ++bi) {
+            DenseTile dense;
+            loadDenseTile(blocks_[bi], in, dense, BG, geoOutOfRangeIgnored, geoBadLabelIgnored);
+            TileCCL ccl = tileLocalCCL(dense, BG, nullptr, true);
+            const BorderRemapInfo remapInfo = remapTileToBorderComponents(ccl, INVALID);
+            if (ccl.pixelCid.size() != dense.lab.size()) {
+                error("%s: Pixel-to-component map size mismatch", __func__);
+            }
+
+            for (size_t idx = 0; idx < dense.lab.size(); ++idx) {
+                const uint8_t lbl = dense.lab[idx];
+                if (lbl >= BG) continue;
+                const uint32_t oldCid = ccl.pixelCid[idx];
+                if (oldCid == INVALID) continue;
+                if (oldCid >= remapInfo.remap.size()) {
+                    error("%s: Pixel-local component id out of range", __func__);
+                }
+
+                size_t ccIdx = NO_CC;
+                const uint32_t remappedCid = remapInfo.remap[oldCid];
+                if (remappedCid == INVALID) {
+                    if (bi >= localOldToCcIdx.size() || oldCid >= localOldToCcIdx[bi].size()) {
+                        error("%s: Missing non-border component lookup", __func__);
+                    }
+                    ccIdx = localOldToCcIdx[bi][oldCid];
+                } else {
+                    if (bi >= dsuState.tileRoot.size() || remappedCid >= dsuState.tileRoot[bi].size()) {
+                        error("%s: Missing border root lookup", __func__);
+                    }
+                    const size_t root = dsuState.tileRoot[bi][remappedCid];
+                    if (root < rootToCcIdx.size()) {
+                        ccIdx = rootToCcIdx[root];
+                    }
+                }
+                if (ccIdx == NO_CC) continue;
+                if (ccIdx >= componentPixels[static_cast<size_t>(lbl)].size()) {
+                    error("%s: GeoJSON component rank out of range", __func__);
+                }
+
+                const size_t y = idx / dense.W;
+                const size_t x = idx - y * dense.W;
+                componentPixels[static_cast<size_t>(lbl)][ccIdx].push_back(
+                    GridPoint{
+                        dense.pixX0 + static_cast<int32_t>(x),
+                        dense.pixY0 + static_cast<int32_t>(y)
+                    });
+            }
+        }
+
+        for (int32_t k = 0; k < K; ++k) {
+            const std::string outGeo = outPrefix + ".connected_components.k" + std::to_string(k) + ".geojson";
+            std::ofstream geoOut(outGeo);
+            if (!geoOut.is_open()) {
+                error("%s: Cannot open output file %s", __func__, outGeo.c_str());
+            }
+            geoOut << "{\"type\":\"FeatureCollection\",\"features\":[";
+            const auto& vec = perLabelComponents[static_cast<size_t>(k)];
+            const auto& pix = componentPixels[static_cast<size_t>(k)];
+            for (size_t i = 0; i < vec.size(); ++i) {
+                if (pix[i].size() != static_cast<size_t>(vec[i].size)) {
+                    error("%s: GeoJSON pixel count mismatch for label %d component %zu", __func__, k, i);
+                }
+                const double cx = static_cast<double>(vec[i].sumX) / static_cast<double>(vec[i].size);
+                const double cy = static_cast<double>(vec[i].sumY) / static_cast<double>(vec[i].size);
+                nlohmann::json feature;
+                feature["type"] = "Feature";
+                feature["properties"] = {
+                    {"k", k},
+                    {"cc_idx", i},
+                    {"size", vec[i].size},
+                    {"centroid_x", cx},
+                    {"centroid_y", cy},
+                    {"xmin", vec[i].box.minX},
+                    {"xmax", vec[i].box.maxX},
+                    {"ymin", vec[i].box.minY},
+                    {"ymax", vec[i].box.maxY}
+                };
+                feature["geometry"] = buildComponentGeometry(
+                    pix[i],
+                    vec[i].box.minX,
+                    vec[i].box.maxX,
+                    vec[i].box.minY,
+                    vec[i].box.maxY);
+                if (i > 0) {
+                    geoOut << ",";
+                }
+                geoOut << feature.dump();
+            }
+            geoOut << "]}";
+            geoOut.close();
+            notice("%s: Wrote per-label connected component polygons to %s", __func__, outGeo.c_str());
+        }
+    }
 
     if (totalOutOfRangeIgnored > 0) {
         warning("%s: Ignored %llu out-of-tile records",

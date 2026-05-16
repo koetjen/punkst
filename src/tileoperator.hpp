@@ -135,7 +135,8 @@ public:
     void smoothTopLabels2D(const std::string& outPrefix, int32_t islandSmoothRounds = 1, bool fillEmptyIslands = false);
 
     void spatialMetricsBasic(const std::string& outPrefix);
-    void connectedComponents(const std::string& outPrefix, uint32_t minSize = 10);
+    void connectedComponents(const std::string& outPrefix, uint32_t minSize = 10,
+        bool writeGeoJson = false);
     void profileShellAndSurface(const std::string& outPrefix,
         const std::vector<int32_t>& radii, int32_t dMax,
         uint32_t minCompSize = 10, uint32_t minPixPerTilePerLabel = 0);
@@ -305,6 +306,7 @@ private:
         std::vector<PixBox> compBox;
         std::vector<uint32_t> bndPix;
         std::vector<uint32_t> bndCid;
+        std::vector<uint32_t> pixelCid;
     };
 
     struct BorderRemapInfo {
@@ -363,7 +365,9 @@ private:
 
     void loadDenseTile(const TileInfo& blk, std::ifstream& in, DenseTile& out, uint8_t bg, uint64_t& nOutOfRangeIgnored, uint64_t& nBadLabelIgnored) const;
     // Connected component labeling within a tile
-    TileCCL tileLocalCCL(const DenseTile& tile, uint8_t bg, const std::vector<uint8_t>* boundaryMask = nullptr) const;
+    TileCCL tileLocalCCL(const DenseTile& tile, uint8_t bg,
+        const std::vector<uint8_t>* boundaryMask = nullptr,
+        bool keepPixelCid = false) const;
     // Mask boundary pixels: iff any of its 4 neighbors have a different label
     void computeTileBoundaryMasks(std::vector<DenseTile>& tiles) const;
     // Detect border components and remap them to global IDs

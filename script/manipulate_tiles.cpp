@@ -22,6 +22,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     bool cellAnno = false;
     bool spatialMetrics = false;
     bool cnctComponents = false;
+    bool cnctComponentsGeoJson = false;
     bool profileShellSurface = false;
     uint32_t ccMinSize = 1;
     std::vector<int32_t> shellRadii;
@@ -55,6 +56,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("fill-empty-islands", "Fill empty pixels surrounded by consistent neighbors (only for --smooth-top-labels)", fillEmptyIslands)
       .add_option("spatial-metrics", "Compute area/perim metrics for single & pairwise channels", spatialMetrics)
       .add_option("connected-components", "Compute global connected-component sizes per label", cnctComponents)
+      .add_option("connected-components-geojson", "Write per-label GeoJSON polygons for reported connected components", cnctComponentsGeoJson)
       .add_option("cc-min-size", "Minimum size of connected components", ccMinSize)
       .add_option("shell-surface", "Compute shell occupancy and directional surface-distance histograms", profileShellSurface)
       .add_option("shell-radii", "Radii list for --spatial-shell-surface (pixel units)", shellRadii)
@@ -132,7 +134,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         return 0;
     }
     if (cnctComponents) {
-        tileOp.connectedComponents(outPrefix, ccMinSize);
+        tileOp.connectedComponents(outPrefix, ccMinSize, cnctComponentsGeoJson);
         return 0;
     }
     if (profileShellSurface) {

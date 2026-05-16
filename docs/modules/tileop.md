@@ -239,12 +239,15 @@ Compute global connected components for each label (4-neighborhood on raster pix
 
 ```bash
 punkst tile-op --connected-components --in path/result [--binary] \
-  --cc-min-size 25 --out path/out_prefix
+  --cc-min-size 25 [--connected-components-geojson] \
+  --out path/out_prefix
 ```
 
 `--connected-components` - run connected component profiling.
 
 `--cc-min-size` - minimum component size to report in the main component table (histogram still includes all sizes).
+
+`--connected-components-geojson` - additionally write one GeoJSON `FeatureCollection` per label containing polygons for the reported components.
 
 Output:
 
@@ -259,6 +262,10 @@ Output:
   - label index (`#k`)
   - component size (`size`)
   - number of components with that size (`n_components`)
+
+- `path/out_prefix.connected_components.k<k>.geojson`: emitted only with `--connected-components-geojson`; one `FeatureCollection` per label with one feature per reported component
+  - geometry in pixel-edge coordinates as `Polygon` or `MultiPolygon`
+  - properties matching the TSV row: `k`, `cc_idx`, `size`, `centroid_x`, `centroid_y`, `xmin`, `xmax`, `ymin`, `ymax`
 
 ### Shell and Surface Profiles
 

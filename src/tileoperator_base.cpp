@@ -534,7 +534,7 @@ bool TileOperator::parseLine(const std::string& line, PixTopProbs<float>& R) con
 bool TileOperator::parseLine(const std::string& line, PixTopProbs<int32_t>& R) const {
     std::vector<std::string> tokens;
     split(tokens, "\t", line);
-    if (tokens.size() <= icol_max_ + 1) return false;
+    if (tokens.size() < icol_max_ + 1) return false;
     if (!str2int32(tokens[icol_x_], R.x) ||
         !str2int32(tokens[icol_y_], R.y)) {
         return false;
@@ -590,7 +590,7 @@ bool TileOperator::parseLine(const std::string& line, PixTopProbs3D<float>& R) c
 bool TileOperator::parseLine(const std::string& line, PixTopProbs3D<int32_t>& R) const {
     std::vector<std::string> tokens;
     split(tokens, "\t", line);
-    if (tokens.size() <= icol_max_ + 1) return false;
+    if (tokens.size() < icol_max_ + 1) return false;
     if (!str2int32(tokens[icol_x_], R.x) ||
         !str2int32(tokens[icol_y_], R.y)) {
         return false;

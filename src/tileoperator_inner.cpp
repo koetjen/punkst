@@ -67,7 +67,8 @@ void TileOperator::loadDenseTile(const TileInfo& blk, std::ifstream& in, DenseTi
     }
 }
 
-TileOperator::TileCCL TileOperator::tileLocalCCL(const DenseTile& tile, uint8_t bg, const std::vector<uint8_t>* boundaryMask) const {
+TileOperator::TileCCL TileOperator::tileLocalCCL(const DenseTile& tile, uint8_t bg,
+    const std::vector<uint8_t>* boundaryMask, bool keepPixelCid) const {
     const uint32_t INVALID = std::numeric_limits<uint32_t>::max();
     TileCCL out;
     out.pixX0 = tile.pixX0;
@@ -114,6 +115,9 @@ TileOperator::TileCCL TileOperator::tileLocalCCL(const DenseTile& tile, uint8_t 
     }
     // 2nd pass: pixel -> compact component ID
     std::vector<uint32_t> root2cid(nPix, INVALID);
+    if (keepPixelCid) {
+        out.pixelCid.assign(nPix, INVALID);
+    }
     for (size_t idx = 0; idx < nPix; ++idx) {
         if (parent[idx] == INVALID) continue;
         uint32_t r = findRoot(static_cast<uint32_t>(idx));
@@ -135,6 +139,9 @@ TileOperator::TileCCL TileOperator::tileLocalCCL(const DenseTile& tile, uint8_t 
         out.compSumX[cid] += static_cast<uint64_t>(gx);
         out.compSumY[cid] += static_cast<uint64_t>(gy);
         out.compBox[cid].include(gx, gy);
+        if (keepPixelCid) {
+            out.pixelCid[idx] = cid;
+        }
     }
     out.ncomp = static_cast<uint32_t>(out.compSize.size());
     auto cidAt = [&](size_t idx) -> uint32_t {
