@@ -662,6 +662,40 @@ The single-channel table includes one extra row with `#k = K`, representing empt
   - $L_{kl} / P_l$ (`frac2`)
   - $L_{kl} / (A_k + A_l)$ (`density`)
 
+### Connected Components
+
+Compute global connected components for each label (4-neighborhood on raster pixels), merged across tile boundaries.
+
+```bash
+punkst tile-op --connected-components --in path/result [--binary] \
+  --cc-min-size 25 [--connected-components-geojson] \
+  --out path/out_prefix
+```
+
+`--connected-components` - run connected component profiling.
+
+`--cc-min-size` - minimum component size to report in the main component table (histogram still includes all sizes).
+
+`--connected-components-geojson` - additionally write one GeoJSON `FeatureCollection` per label containing polygons for the reported components.
+
+Output:
+
+- `path/out_prefix.connected_components.tsv`: one row per reported component with columns
+  - label index (`#k`)
+  - component rank within label by descending size (`cc_idx`)
+  - component size in pixels (`size`)
+  - centroid in pixel coordinates (`centroid_x`, `centroid_y`)
+  - inclusive coordinate range (`xmin`, `xmax`, `ymin`, `ymax`)
+
+- `path/out_prefix.connected_components_hist.tsv`: size histogram for all components with columns
+  - label index (`#k`)
+  - component size (`size`)
+  - number of components with that size (`n_components`)
+
+- `path/out_prefix.connected_components.k<k>.geojson`: emitted only with `--connected-components-geojson`; one `FeatureCollection` per label with one feature per reported component
+  - geometry in pixel-edge coordinates as `Polygon` or `MultiPolygon`
+  - properties matching the TSV row: `k`, `cc_idx`, `size`, `centroid_x`, `centroid_y`, `xmin`, `xmax`, `ymin`, `ymax`
+
 ### Shell and Surface Profiles
 
 Profile the factor composition in the immediate neighborhood of a factor, and pairwise spatial proximity between factors.

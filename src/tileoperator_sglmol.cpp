@@ -478,7 +478,7 @@ void TileOperator::annotateSingleMolecule(const std::string& ptPrefix,
     if (!headerBase.empty()) {
         const auto& headerPrefixView = mergePrefixes.empty() ? mergePrefixes : headerPrefixes;
         std::string headerStr = buildCanonicalAnnotateHeader(
-            headerBase, use3d, icol_f >= 0, headerKvec, headerPrefixView);
+            headerBase, use3d, true, headerKvec, headerPrefixView);
         std::fprintf(fp, "%s\n", headerStr.c_str());
         headerBytes = headerStr.size() + 1;
     }
@@ -489,6 +489,9 @@ void TileOperator::annotateSingleMolecule(const std::string& ptPrefix,
     IndexHeader idxHeader = formatInfo_;
     idxHeader.mode &= ~0x47u;
     idxHeader.recordSize = 0;
+    if (!idxHeader.packKvec(headerKvec)) {
+        warning("%s: output factor layout exceeds compact index encoding limits", __func__);
+    }
     if (fdIndex >= 0 && !write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
         error("%s: Index header write error", __func__);
     }

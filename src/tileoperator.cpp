@@ -613,7 +613,7 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
     if (!headerBase.empty()) {
         const auto& headerPrefixView = mergePrefixes.empty() ? mergePrefixes : headerPrefixes;
         std::string headerStr = buildCanonicalAnnotateHeader(
-            headerBase, use3d, icol_f >= 0, headerKvec, headerPrefixView);
+            headerBase, use3d, true, headerKvec, headerPrefixView);
         fprintf(fp, "%s\n", headerStr.c_str());
         headerBytes = headerStr.size() + 1;
     }
@@ -624,6 +624,9 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
     IndexHeader idxHeader = formatInfo_;
     idxHeader.mode &= ~(0x7);
     idxHeader.recordSize = 0;
+    if (!idxHeader.packKvec(headerKvec)) {
+        warning("%s: output factor layout exceeds compact index encoding limits", __func__);
+    }
     if (fdIndex >= 0 && !write_all(fdIndex, &idxHeader, sizeof(idxHeader))) error("Index header write error");
 
     std::vector<TileKey> tiles;

@@ -26,6 +26,8 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     bool probDot = false;
     bool cellAnno = false;
     bool spatialMetrics = false;
+    bool cnctComponents = false;
+    bool cnctComponentsGeoJson = false;
     bool profileShellSurface = false;
     bool profileOneFactorMask = false;
     bool runSoftFactorMask = false;
@@ -149,8 +151,10 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     pl.add_option("smooth-top-labels", "Per-tile island smoothing of top labels (>0 to enable)", smoothTopLabelsRounds)
       .add_option("fill-empty-islands", "Fill empty pixels surrounded by consistent neighbors (for --smooth-top-labels)", fillEmptyIslands)
       .add_option("spatial-metrics", "Compute area/perim metrics for single & pairwise channels", spatialMetrics)
+      .add_option("connected-components", "Compute global connected-component sizes per label", cnctComponents)
+      .add_option("connected-components-geojson", "Write per-label GeoJSON polygons for reported connected components", cnctComponentsGeoJson)
       .add_option("shell-surface", "Compute shell occupancy and directional surface-distance histograms", profileShellSurface)
-      .add_option("cc-min-size", "Minimum connected-component size for --shell-surface and --hard-factor-mask", minComponentSize)
+      .add_option("cc-min-size", "Minimum connected-component size for --connected-components, --shell-surface, and --hard-factor-mask", minComponentSize)
       .add_option("shell-radii", "Radii list for --shell-surface (pixel units)", shellRadii)
       .add_option("surface-dmax", "Maximum distance for surface histogram in --shell-surface", surfaceDmax)
       .add_option("spatial-min-pix-per-tile-label", "Only seed a label in a tile if nPixels(label,tile) >= this threshold", minPixPerTilePerLabel);
@@ -248,7 +252,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         tileOp.sampleTilesToDebug(debug_);
     }
     if (hasRasterPixelResOverride &&
-        !(smoothTopLabelsRounds > 0 || spatialMetrics || profileShellSurface ||
+        !(smoothTopLabelsRounds > 0 || spatialMetrics || cnctComponents || profileShellSurface ||
           profileOneFactorMask || runSoftFactorMask || runHardFactorMask)) {
         error("--raster-pixel-res is currently supported only with raster-style tile-op commands");
     }
@@ -380,7 +384,18 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         tileOp.spatialMetricsBasic(outPrefix);
         return 0;
     }
+    if (cnctComponents) {
+        applyRasterPixelResOverride();
+        tileOp.connectedComponents(outPrefix, minComponentSize, cnctComponentsGeoJson);
+        return 0;
+    }
     if (profileShellSurface) {
+        if (shellRadii.empty()) {
+            error("--shell-radii is required for --shell-surface");
+        }
+        if (surfaceDmax < 0) {
+            error("--surface-dmax (>=0) is required for --shell-surface");
+        }
         applyRasterPixelResOverride();
         tileOp.profileShellAndSurface(outPrefix, shellRadii, surfaceDmax, minComponentSize, minPixPerTilePerLabel);
         return 0;

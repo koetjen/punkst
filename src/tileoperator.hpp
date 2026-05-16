@@ -236,6 +236,9 @@ public:
     void smoothTopLabels2D(const std::string& outPrefix, int32_t islandSmoothRounds = 1, bool fillEmptyIslands = false);
     // Compute basic spatial metrics
     void spatialMetricsBasic(const std::string& outPrefix);
+    // Compute global connected components
+    void connectedComponents(const std::string& outPrefix, uint32_t minSize = 10,
+        bool writeGeoJson = false);
     // Profile shell occupancy and surface distance
     void profileShellAndSurface(const std::string& outPrefix,
         const std::vector<int32_t>& radii, int32_t dMax,
