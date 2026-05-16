@@ -47,6 +47,20 @@ inline void spatialAccumulateEdge(SpatialMetricsAccum& m, uint8_t a, uint8_t b) 
     m.perim[static_cast<size_t>(b)]++;
 }
 
+void rescaleGeometryCoordinates(nlohmann::json& node, double scaleInv) {
+    if (!node.is_array()) {
+        return;
+    }
+    if (node.size() == 2 && node[0].is_number() && node[1].is_number()) {
+        node[0] = node[0].get<double>() * scaleInv;
+        node[1] = node[1].get<double>() * scaleInv;
+        return;
+    }
+    for (auto& child : node) {
+        rescaleGeometryCoordinates(child, scaleInv);
+    }
+}
+
 } // namespace
 
 void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islandSmoothRounds, bool fillEmptyIslands) {
@@ -424,6 +438,360 @@ void TileOperator::spatialMetricsBasic(const std::string& outPrefix) {
     }
     fclose(fpPairwise);
     notice("%s: Wrote pairwise metrics to %s", __func__, outPairwise.c_str());
+    if (totalOutOfRangeIgnored > 0) {
+        warning("%s: Ignored %llu out-of-tile records",
+            __func__, static_cast<unsigned long long>(totalOutOfRangeIgnored));
+    }
+    if (totalBadLabelIgnored > 0) {
+        warning("%s: Ignored %llu records with invalid labels",
+            __func__, static_cast<unsigned long long>(totalBadLabelIgnored));
+    }
+}
+
+void TileOperator::connectedComponents(const std::string& outPrefix, uint32_t minSize,
+    bool writeGeoJson) {
+    requireNoFeatureIndex(__func__);
+    if (blocks_.empty()) {
+        warning("%s: No tiles to process", __func__);
+        return;
+    }
+    if (!regular_labeled_raster_ || coord_dim_ != 2) {
+        error("%s only supports raster 2D data with regular tiles", __func__);
+    }
+    if (K_ <= 0 || K_ > 255) {
+        error("%s: K must be in [1, 255], got %d", __func__, K_);
+    }
+    const int32_t K = K_;
+    const uint8_t BG = static_cast<uint8_t>(K);
+    const uint32_t INVALID = std::numeric_limits<uint32_t>::max();
+    const size_t NO_CC = std::numeric_limits<size_t>::max();
+    const auto tStage1Start = std::chrono::steady_clock::now();
+
+    std::vector<TileCCL> perTile(blocks_.size());
+    uint64_t totalOutOfRangeIgnored = 0;
+    uint64_t totalBadLabelIgnored = 0;
+    if (threads_ > 1 && blocks_.size() > 1) {
+        tbb::global_control global_limit(
+            tbb::global_control::max_allowed_parallelism,
+            static_cast<size_t>(threads_));
+        tbb::combinable<std::pair<uint64_t, uint64_t>> tlsIgnored(
+            [] { return std::make_pair(0ULL, 0ULL); });
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, blocks_.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                std::ifstream in;
+                if (mode_ & 0x1) {
+                    in.open(dataFile_, std::ios::binary);
+                } else {
+                    in.open(dataFile_);
+                }
+                if (!in.is_open()) {
+                    error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+                }
+                auto& localIgnored = tlsIgnored.local();
+                for (size_t bi = range.begin(); bi < range.end(); ++bi) {
+                    DenseTile dense;
+                    loadDenseTile(blocks_[bi], in, dense, BG,
+                        localIgnored.first, localIgnored.second);
+                    perTile[bi] = tileLocalCCL(dense, BG, nullptr, writeGeoJson);
+                }
+            });
+        tlsIgnored.combine_each([&](const std::pair<uint64_t, uint64_t>& localIgnored) {
+            totalOutOfRangeIgnored += localIgnored.first;
+            totalBadLabelIgnored += localIgnored.second;
+        });
+    } else {
+        std::ifstream in;
+        if (mode_ & 0x1) {
+            in.open(dataFile_, std::ios::binary);
+        } else {
+            in.open(dataFile_);
+        }
+        if (!in.is_open()) {
+            error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+        }
+        for (size_t bi = 0; bi < blocks_.size(); ++bi) {
+            DenseTile dense;
+            loadDenseTile(blocks_[bi], in, dense, BG,
+                totalOutOfRangeIgnored, totalBadLabelIgnored);
+            perTile[bi] = tileLocalCCL(dense, BG, nullptr, writeGeoJson);
+        }
+    }
+    const auto tStage1End = std::chrono::steady_clock::now();
+
+    struct CCOutRec {
+        uint64_t size = 0;
+        uint64_t sumX = 0;
+        uint64_t sumY = 0;
+        PixBox box;
+        bool fromBorder = false;
+        size_t tileIdx = NO_CC;
+        uint32_t localCid = INVALID;
+        size_t borderRoot = NO_CC;
+    };
+    std::vector<std::vector<CCOutRec>> perLabelComponents(static_cast<size_t>(K));
+    std::vector<std::unordered_map<uint64_t, uint64_t>> perLabelHist(static_cast<size_t>(K));
+    std::vector<std::vector<size_t>> localOldToCcIdx;
+    std::vector<BorderRemapInfo> remapByTile;
+    if (writeGeoJson) {
+        localOldToCcIdx.resize(blocks_.size());
+        remapByTile.resize(blocks_.size());
+    }
+    auto addFinalComponent = [&](uint8_t lbl, uint64_t size,
+                                 uint64_t sumX, uint64_t sumY,
+                                 const PixBox& box,
+                                 bool fromBorder,
+                                 size_t tileIdx,
+                                 uint32_t localCid,
+                                 size_t borderRoot) {
+        if (lbl >= BG || size == 0) {
+            return;
+        }
+        perLabelHist[static_cast<size_t>(lbl)][size] += 1;
+        if (size >= static_cast<uint64_t>(minSize)) {
+            perLabelComponents[static_cast<size_t>(lbl)].push_back(
+                CCOutRec{size, sumX, sumY, box, fromBorder, tileIdx, localCid, borderRoot});
+        }
+    };
+
+    const auto tStage15Start = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < perTile.size(); ++i) {
+        auto& t = perTile[i];
+        if (t.ncomp == 0) {
+            continue;
+        }
+        BorderRemapInfo remapInfo = remapTileToBorderComponents(t, INVALID);
+        const BorderRemapInfo* infoPtr = &remapInfo;
+        if (writeGeoJson) {
+            localOldToCcIdx[i].assign(remapInfo.remap.size(), NO_CC);
+            remapByTile[i] = std::move(remapInfo);
+            infoPtr = &remapByTile[i];
+        }
+        const BorderRemapInfo& info = *infoPtr;
+        for (uint32_t cid = 0; cid < info.remap.size(); ++cid) {
+            if (info.remap[cid] != INVALID) {
+                continue;
+            }
+            addFinalComponent(
+                info.oldCompLabel[cid],
+                static_cast<uint64_t>(info.oldCompSize[cid]),
+                info.oldCompSumX[cid],
+                info.oldCompSumY[cid],
+                info.oldCompBox[cid],
+                false,
+                i,
+                cid,
+                NO_CC);
+        }
+    }
+    const auto tStage15End = std::chrono::steady_clock::now();
+
+    const auto tStage2Start = std::chrono::steady_clock::now();
+    const BorderDSUState dsuState = mergeBorderComponentsWithDSU(perTile, BG, INVALID);
+    std::vector<size_t> rootToCcIdx;
+    if (writeGeoJson) {
+        rootToCcIdx.assign(dsuState.rootSize.size(), NO_CC);
+    }
+    for (size_t root = 0; root < dsuState.rootSize.size(); ++root) {
+        if (dsuState.rootSize[root] == 0 || dsuState.rootLabel[root] >= BG) {
+            continue;
+        }
+        addFinalComponent(
+            dsuState.rootLabel[root],
+            dsuState.rootSize[root],
+            dsuState.rootSumX[root],
+            dsuState.rootSumY[root],
+            dsuState.rootBox[root],
+            true,
+            NO_CC,
+            INVALID,
+            root);
+    }
+    const auto tStage2End = std::chrono::steady_clock::now();
+    notice("%s: timing(ms): stage1=%lld stage1.5=%lld stage2=%lld",
+        __func__,
+        static_cast<long long>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(tStage1End - tStage1Start).count()),
+        static_cast<long long>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(tStage15End - tStage15Start).count()),
+        static_cast<long long>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(tStage2End - tStage2Start).count()));
+
+    std::string outCc = outPrefix + ".connected_components.tsv";
+    FILE* fpCc = fopen(outCc.c_str(), "w");
+    if (!fpCc) {
+        error("%s: Cannot open output file %s", __func__, outCc.c_str());
+    }
+    fprintf(fpCc, "#k\tcc_idx\tsize\tcentroid_x\tcentroid_y\txmin\txmax\tymin\tymax\n");
+    for (int32_t k = 0; k < K; ++k) {
+        auto& vec = perLabelComponents[static_cast<size_t>(k)];
+        std::sort(vec.begin(), vec.end(),
+            [](const CCOutRec& a, const CCOutRec& b) {
+                if (a.size != b.size) return a.size > b.size;
+                if (a.box.minX != b.box.minX) return a.box.minX < b.box.minX;
+                if (a.box.minY != b.box.minY) return a.box.minY < b.box.minY;
+                if (a.box.maxX != b.box.maxX) return a.box.maxX < b.box.maxX;
+                return a.box.maxY < b.box.maxY;
+            });
+        for (size_t i = 0; i < vec.size(); ++i) {
+            const double cx = static_cast<double>(vec[i].sumX) / static_cast<double>(vec[i].size);
+            const double cy = static_cast<double>(vec[i].sumY) / static_cast<double>(vec[i].size);
+            fprintf(fpCc, "%d\t%zu\t%llu\t%.6f\t%.6f\t%d\t%d\t%d\t%d\n",
+                k,
+                i,
+                static_cast<unsigned long long>(vec[i].size),
+                cx,
+                cy,
+                vec[i].box.minX,
+                vec[i].box.maxX,
+                vec[i].box.minY,
+                vec[i].box.maxY);
+            if (!writeGeoJson) {
+                continue;
+            }
+            if (vec[i].fromBorder) {
+                if (vec[i].borderRoot >= rootToCcIdx.size()) {
+                    error("%s: Border root index out of range", __func__);
+                }
+                rootToCcIdx[vec[i].borderRoot] = i;
+            } else {
+                if (vec[i].tileIdx >= localOldToCcIdx.size()
+                    || vec[i].localCid >= localOldToCcIdx[vec[i].tileIdx].size()) {
+                    error("%s: Tile-local component index out of range", __func__);
+                }
+                localOldToCcIdx[vec[i].tileIdx][vec[i].localCid] = i;
+            }
+        }
+    }
+    fclose(fpCc);
+    notice("%s: Wrote connected components to %s", __func__, outCc.c_str());
+
+    std::string outHist = outPrefix + ".connected_components_hist.tsv";
+    FILE* fpHist = fopen(outHist.c_str(), "w");
+    if (!fpHist) {
+        error("%s: Cannot open output file %s", __func__, outHist.c_str());
+    }
+    fprintf(fpHist, "#k\tsize\tn_components\n");
+    for (int32_t k = 0; k < K; ++k) {
+        const auto& hist = perLabelHist[static_cast<size_t>(k)];
+        for (const auto& kv : hist) {
+            fprintf(fpHist, "%d\t%llu\t%llu\n",
+                k,
+                static_cast<unsigned long long>(kv.first),
+                static_cast<unsigned long long>(kv.second));
+        }
+    }
+    fclose(fpHist);
+    notice("%s: Wrote connected component size histogram to %s", __func__, outHist.c_str());
+
+    if (writeGeoJson) {
+        std::vector<std::vector<Clipper2Lib::Paths64>> componentPaths(static_cast<size_t>(K));
+        for (int32_t k = 0; k < K; ++k) {
+            componentPaths[static_cast<size_t>(k)].resize(
+                perLabelComponents[static_cast<size_t>(k)].size());
+        }
+
+        for (size_t bi = 0; bi < perTile.size(); ++bi) {
+            const auto& info = remapByTile[bi];
+            if (info.remap.empty()) {
+                continue;
+            }
+            if (perTile[bi].pixelCid.empty()) {
+                error("%s: Missing pixel-to-component map for GeoJSON export", __func__);
+            }
+            TileGeom geom;
+            initTileGeom(blocks_[bi], geom);
+            for (uint32_t oldCid = 0; oldCid < info.remap.size(); ++oldCid) {
+                const uint8_t lbl = info.oldCompLabel[oldCid];
+                if (lbl >= BG) {
+                    continue;
+                }
+                size_t ccIdx = NO_CC;
+                const uint32_t newCid = info.remap[oldCid];
+                if (newCid == INVALID) {
+                    if (oldCid >= localOldToCcIdx[bi].size()) {
+                        error("%s: Missing non-border component lookup", __func__);
+                    }
+                    ccIdx = localOldToCcIdx[bi][oldCid];
+                } else {
+                    if (bi >= dsuState.tileRoot.size() || newCid >= dsuState.tileRoot[bi].size()) {
+                        error("%s: Missing border root lookup", __func__);
+                    }
+                    const size_t root = dsuState.tileRoot[bi][newCid];
+                    if (root < rootToCcIdx.size()) {
+                        ccIdx = rootToCcIdx[root];
+                    }
+                }
+                if (ccIdx == NO_CC) {
+                    continue;
+                }
+                if (ccIdx >= componentPaths[static_cast<size_t>(lbl)].size()) {
+                    error("%s: GeoJSON component rank out of range", __func__);
+                }
+                Clipper2Lib::Paths64 paths = buildLabelComponentPolygons(
+                    perTile[bi].pixelCid,
+                    geom.W,
+                    oldCid,
+                    info.oldCompBox[oldCid],
+                    geom,
+                    0,
+                    0.0);
+                auto& dst = componentPaths[static_cast<size_t>(lbl)][ccIdx];
+                dst.insert(dst.end(), paths.begin(), paths.end());
+            }
+        }
+
+        const double coordScale = static_cast<double>(
+            getRasterPixelResolution() > 0.0f ? getRasterPixelResolution() : 1.0f);
+        const double scaleInv = 1.0 / coordScale;
+        for (int32_t k = 0; k < K; ++k) {
+            nlohmann::json features = nlohmann::json::array();
+            const auto& vec = perLabelComponents[static_cast<size_t>(k)];
+            for (size_t i = 0; i < vec.size(); ++i) {
+                Clipper2Lib::Paths64 merged = cleanupMaskPolygons(componentPaths[static_cast<size_t>(k)][i], 0, 0.0);
+                nlohmann::json geometry = maskPathsToMultiPolygonGeoJSON(merged);
+                if (scaleInv != 1.0) {
+                    rescaleGeometryCoordinates(geometry["coordinates"], scaleInv);
+                }
+                if (geometry["type"] == "MultiPolygon"
+                    && geometry["coordinates"].is_array()
+                    && geometry["coordinates"].size() == 1) {
+                    geometry["type"] = "Polygon";
+                    geometry["coordinates"] = geometry["coordinates"][0];
+                }
+                const double cx = static_cast<double>(vec[i].sumX) / static_cast<double>(vec[i].size);
+                const double cy = static_cast<double>(vec[i].sumY) / static_cast<double>(vec[i].size);
+                nlohmann::json feature;
+                feature["type"] = "Feature";
+                feature["properties"] = {
+                    {"k", k},
+                    {"cc_idx", i},
+                    {"size", vec[i].size},
+                    {"centroid_x", cx},
+                    {"centroid_y", cy},
+                    {"xmin", vec[i].box.minX},
+                    {"xmax", vec[i].box.maxX},
+                    {"ymin", vec[i].box.minY},
+                    {"ymax", vec[i].box.maxY}
+                };
+                feature["geometry"] = std::move(geometry);
+                features.push_back(std::move(feature));
+            }
+
+            nlohmann::json featureCollection;
+            featureCollection["type"] = "FeatureCollection";
+            featureCollection["features"] = std::move(features);
+            const std::string outGeo = outPrefix + ".connected_components.k" + std::to_string(k) + ".geojson";
+            std::ofstream geoOut(outGeo);
+            if (!geoOut.is_open()) {
+                error("%s: Cannot open output file %s", __func__, outGeo.c_str());
+            }
+            geoOut << featureCollection.dump();
+            geoOut.close();
+            notice("%s: Wrote per-label connected component polygons to %s",
+                __func__, outGeo.c_str());
+        }
+    }
+
     if (totalOutOfRangeIgnored > 0) {
         warning("%s: Ignored %llu out-of-tile records",
             __func__, static_cast<unsigned long long>(totalOutOfRangeIgnored));
